@@ -150,10 +150,11 @@ namespace xcore
 
 		bool		take(xthread* thread, xactor*& actor, xmessage*& msg, void*& arg)
 		{
-			// The boolean 'add_back_to_workqueue' is true when actor!=NULL and the message queue of 
-			// the 'actor' still has messages.
+			// The argument 'arg' is set when actor!=NULL and the message queue of 
+			// the 'actor' still has messages. 'arg' has to be passed when calling
+			// 'done()'
 
-			// If add_back_to_workqueue==false and the work-queue is empty then return 
+			// If 'actor-still-has-messages'==false and the work-queue is empty then return 
 			// false and the thread will go into the wait() function of the queue-semaphore.
 		}
 
