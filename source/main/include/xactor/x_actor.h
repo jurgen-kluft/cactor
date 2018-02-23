@@ -61,8 +61,8 @@ namespace xcore
 		virtual void		setmailbox(xmailbox* mailbox) = 0;
 		virtual xmailbox*	getmailbox() = 0;
 
-		virtual void		process(xmessage* msg) = 0;
-		virtual void		gc(xmessage*& msg) = 0;
+		virtual void		received(xmessage* msg) = 0;
+		virtual void		returned(xmessage*& msg) = 0;
 	};
 
 	class xworker_thread
