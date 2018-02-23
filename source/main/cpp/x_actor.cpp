@@ -10,23 +10,6 @@
 
 namespace xcore
 {
-	// Handling a message and figuring out what function to call on the
-	// receiving actor.
-	// An actor can register message handlers by first registering the
-	// message struct
-
-	class my_message : public xmessage
-	{
-	protected:
-		//XACTOR_DECLARE_MESSAGE(my_message);
-
-		s32					m_my_data1;
-		f32					m_my_data2;
-
-	public:
-		
-	};
-
 	class s32atomic
 	{
 		std::atomic<s32> m_value;
@@ -49,11 +32,7 @@ namespace xcore
 	// creation, re-use and destruction of messages.
 
 	// There are a fixed number of worker-threads, initialized according to what
-	// the user needs. The user can use the xsystem package to identify how
-	// many physical and logical cores this machine has as well as how many
-	// hardware threads.
-
-	// C 1 | R 20 | RW 20 | W 20
+	// the user needs. 
 
 	const u64 WRITE_INDEX_SHIFT = 0;
 	const u64 WRITE_INDEX_BITS = 20;
