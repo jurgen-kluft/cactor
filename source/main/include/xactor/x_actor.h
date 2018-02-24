@@ -24,6 +24,10 @@ namespace xcore
 	// The necessary information for a messages is where the message came
 	// from so that the receiving actor can send a message back to the
 	// sender.
+	// We base the receiving of messages on simple structs, messages are
+	// always send back to the sender for garbage collection to simplify
+	// creation, re-use and destruction of messages.
+
 	class xmessage
 	{
 	public:
@@ -38,7 +42,6 @@ namespace xcore
 		xactor*				m_sender;
 		xactor*				m_recipient;
 	};
-
 
 	class xmailbox
 	{
@@ -65,12 +68,6 @@ namespace xcore
 		virtual void		returned(xmessage*& msg) = 0;
 	};
 
-	class xworker_thread
-	{
-	public:
-		virtual bool		quit() const = 0;
-	};
-
 	class xwork
 	{
 	public:
@@ -80,14 +77,6 @@ namespace xcore
 		virtual void		take(xworker_thread* thread, xactor*& actor, xmessage*& msg, u32& idx_begin, u32& idx_end) = 0;
 		virtual void		done(xworker_thread* thread, xactor*& actor, xmessage*& msg, u32& idx_begin, u32& idx_end) = 0;
 	};
-
-
-	class xworker
-	{
-	public:
-		virtual void		run(xworker_thread*, xwork*) = 0;
-	};
-
 
 	class xsystem
 	{
@@ -100,74 +89,6 @@ namespace xcore
 
 		virtual void		send(xmessage* msg, xactor* recipient) = 0;
 	};
-
-
-	class xthread_control
-	{
-	public:
-		virtual void		sleep(u64 time_us) = 0;
-		virtual void		yield() = 0;
-		virtual void		exit() = 0;
-	};
-
-	class xthread_functor
-	{
-	public:
-		virtual s32			run(xthread_control* tc) = 0;
-	};
-
-	class xthreads
-	{
-	public:
-		virtual void		create(xthread*&) = 0;
-		virtual void		teardown(xthread*) = 0;
-
-		virtual void		start(xthread*, xthread_functor*) = 0;
-		virtual void		stop(xthread*) = 0;
-
-		virtual void		exit() = 0;
-		virtual xthread*	current() = 0;
-
-		static void			set_instance(xthreads*);
-		static xthreads*	get_instance();
-	};
-
-	class xthread
-	{
-	public:
-		virtual u64			get_tid() const = 0;
-		virtual u32			get_idx() const = 0;
-		virtual void		get_name(const char*&) const = 0;
-		virtual u64			get_priority() const = 0;
-		virtual u64			get_stacksize() const = 0;
-
-		virtual void*		set_tls_slot(s32 slot, void*) = 0;
-		virtual void*		get_tls_slot(s32 slot) = 0;
-
-	protected:
-		virtual void		set_tid(u64 tid) = 0;
-		virtual void		set_idx(u32 idx) = 0;
-		virtual void		set_name(const char*) = 0;
-		virtual void		set_priority(u64 size) = 0;
-		virtual void		set_stacksize(u64 size) = 0;
-		virtual void		set_tls_storage(s32 max_slots, void** storage) = 0;
-
-		virtual s32			run(xthread_functor* f) = 0;
-		virtual void		stop() = 0;
-
-		virtual void		start() = 0;
-	};
-
-	class xsemaphore
-	{
-	public:
-		virtual void		setup(s32 count) = 0;
-		virtual void		teardown() = 0;
-
-		virtual void		request() = 0;
-		virtual void		release() = 0;
-	};
-
 
 	void				send(xactor* sender, xmessage* msg, xactor* recipient);
 

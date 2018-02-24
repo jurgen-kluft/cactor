@@ -10,6 +10,14 @@
 
 namespace xcore
 {
+	class xworker
+	{
+	public:
+		virtual bool		quit() const = 0;
+		virtual void		run(xwork*) = 0;
+	};
+
+
 	class s32atomic
 	{
 		std::atomic<s32> m_value;
@@ -21,15 +29,11 @@ namespace xcore
 	class s64atomic
 	{
 		std::atomic<s64> m_value;
-
 	public:
 		s64				load() { return m_value.load(); }
 		bool			cas(s64 old, s64 _new) { return m_value.compare_exchange_weak(old, _new); }
 	};
 
-	// We base the receiving of messages on simple structs, messages are
-	// always send back to the sender for garbage collection to simplify
-	// creation, re-use and destruction of messages.
 
 	// There are a fixed number of worker-threads, initialized according to what
 	// the user needs. 
@@ -250,7 +254,7 @@ namespace xcore
 	class xwork_queue
 	{
 		xqueue				m_queue;
-
+		xsemaphore*			m_sema;
 	public:
 		void				initialize(x_iallocator* allocator, s32 max_actors)
 		{
@@ -275,8 +279,6 @@ namespace xcore
 			m_queue.pop(p);
 			actor = (xactor*)p;
 		}
-
-		xsemaphore*			m_sema;
 	};
 
 	class xwork_imp : public xwork
@@ -339,13 +341,12 @@ namespace xcore
 			}
 			msg = NULL;
 		}
-
 	};
 
 	class xworker_imp: public xworker
 	{
 	public:
-		void				run(xworker_thread* thread, xwork* work)
+		void				run(xwork* work)
 		{
 			u32 i, e;
 			xactor* actor;
