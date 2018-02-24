@@ -27,6 +27,7 @@ Build {
     local xactor_inc = "source/main/include/"
     local xbase_inc = "../xbase/source/main/include/"
     local xthread_inc = "../xthread/source/main/include/"
+    local xtime_inc = "../xtime/source/main/include/"
     local xunittest_inc = "../xunittest/source/main/include/"
 
     local xactor_lib = StaticLibrary {
@@ -43,11 +44,19 @@ Build {
       Includes = { xbase_inc },
     }
 
+    local xtime_lib = StaticLibrary {
+      Name = "xtime",
+      Config = "*-*-*-static",
+      Sources = { SourceGlob("../xtime/source/main/cpp") },
+      Includes = { xtime_inc, xbase_inc },
+    }
+
     local xthread_lib = StaticLibrary {
       Name = "xthread",
       Config = "*-*-*-static",
+      Depends = { xtime_lib },
       Sources = { SourceGlob("../xthread/source/main/cpp") },
-      Includes = { xthread_inc, xbase_inc },
+      Includes = { xthread_inc, xtime_inc, xbase_inc },
     }
 
     local xunittest_lib = StaticLibrary {
@@ -59,7 +68,7 @@ Build {
 
     local unittest = Program {
       Name = "xactor_unittest",
-      Depends = { xthread_lib, xtime_lib, xbase_lib, xunittest_lib },
+      Depends = { xactor_lib, xthread_lib, xbase_lib, xunittest_lib },
       Sources = { SourceGlob("source/test/cpp") },
       Includes = { "source/test/include/", xactor_inc, xthread_inc, xbase_inc, xunittest_inc },
     }

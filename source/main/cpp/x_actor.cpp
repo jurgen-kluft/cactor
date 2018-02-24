@@ -1,5 +1,6 @@
 #include "xbase/x_allocator.h"
 #include "xactor/x_actor.h"
+#include "xthread/x_semaphore.h"
 
 #ifdef TARGET_PC
 	#include <windows.h>
@@ -17,7 +18,7 @@ namespace xcore
 		virtual void		run(xwork*) = 0;
 	};
 
-
+	
 	class s32atomic
 	{
 		std::atomic<s32> m_value;
@@ -211,46 +212,6 @@ namespace xcore
 		return 0;
 	}
 
-	class xsemaphore_imp : public xsemaphore
-	{
-		HANDLE				ghSemaphore;
-
-	public:
-		virtual void		setup(s32 initial, s32 maximum)
-		{
-			ghSemaphore = ::CreateSemaphore(
-				NULL,           // default security attributes
-				initial,		// initial count
-				maximum,		// maximum count
-				NULL);          // unnamed semaphore
-		}
-
-		virtual void		teardown()
-		{
-			CloseHandle(ghSemaphore);
-		}
-
-		virtual void		request()
-		{
-			DWORD dwWaitResult = WaitForSingleObject(ghSemaphore, INFINITE);
-			switch (dwWaitResult)
-			{
-			case WAIT_OBJECT_0:	// The semaphore object was signaled.
-
-				break;
-			case WAIT_FAILED:
-				break;
-			}
-		}
-
-		virtual void		release()
-		{
-			::ReleaseSemaphore( ghSemaphore/*handle to semaphore*/, 1 /*increase count by one*/, NULL);
-		}
-
-		XCORE_CLASS_PLACEMENT_NEW_DELETE
-	};
-
 	class xwork_queue
 	{
 		xqueue				m_queue;
@@ -261,7 +222,7 @@ namespace xcore
 			void** queue = (void**)allocator->allocate(sizeof(void*) * max_actors, sizeof(void*));
 			m_queue.init(queue, max_actors);
 
-			x_type_allocator<xsemaphore_imp> sema_type(allocator);
+			x_type_allocator<xsemaphore> sema_type(allocator);
 			m_sema = sema_type.allocate();
 		}
 
@@ -269,13 +230,13 @@ namespace xcore
 		{
 			void * p = (void *)actor;
 			m_queue.push(p);
-			m_sema->release();
+			m_sema->signal();
 		}
 
 		void				pop(xactor*& actor)
 		{
 			void * p;
-			m_sema->request();
+			m_sema->wait();
 			m_queue.pop(p);
 			actor = (xactor*)p;
 		}
@@ -305,7 +266,7 @@ namespace xcore
 			}
 		}
 
-		void				take(xworker_thread* thread, xactor*& actor, xmessage*& msg, u32& msgidx, u32& msgend)
+		void				take(xworker* worker, xactor*& actor, xmessage*& msg, u32& msgidx, u32& msgend)
 		{
 			if (actor == NULL)
 			{
@@ -324,7 +285,7 @@ namespace xcore
 			}
 		}
 
-		void				done(xworker_thread* thread, xactor*& actor, xmessage*& msg, u32& msgidx, u32& msgend)
+		void				done(xworker* worker, xactor*& actor, xmessage*& msg, u32& msgidx, u32& msgend)
 		{
 			// If 'msgidx == msgend' then try and add the actor back to the work-queue since
 			// it was the last message we supposed to have processed.
@@ -352,19 +313,19 @@ namespace xcore
 			xactor* actor;
 			xmessage* msg;
 
-			while (thread->quit()==false)
+			while (quit()==false)
 			{
 				// Try and take an [actor, message] piece of work
-				work->take(thread, actor, msg, i, e);
+				work->take(this, actor, msg, i, e);
 				
 				// Let the actor handle the message
 				if (msg->is_recipient(actor))
 				{
-					actor->process(msg);
+					actor->received(msg);
 					if (msg->is_sender(actor))
 					{
 						// Garbage collect the message immediately
-						actor->gc(msg);
+						actor->returned(msg);
 					}
 					else 
 					{
@@ -374,11 +335,11 @@ namespace xcore
 				}
 				else if (msg->is_sender(actor))
 				{
-					actor->gc(msg);
+					actor->returned(msg);
 				}
 
 				// Report the [actor, message] back as 'done'
-				work->done(thread, actor, msg, i, e);
+				work->done(this, actor, msg, i, e);
 			}
 		}
 	};

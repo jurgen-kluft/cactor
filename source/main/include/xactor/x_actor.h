@@ -14,9 +14,8 @@ namespace xcore
 	class xmessage;
 	class xmessages;
 	class xactor;
-	class xworker_thread;
 	class xwork;
-	class xthread;
+	class xworker;
 
 	// For messages we can have one allocator per actor for sending messages.
 	// This makes the actor be able to control/limit the messages that it
@@ -74,8 +73,8 @@ namespace xcore
 		virtual void		add(xactor* sender, xmessage* msg, xactor* recipient) = 0;
 
 		virtual void		queue(xactor* actor) = 0;
-		virtual void		take(xworker_thread* thread, xactor*& actor, xmessage*& msg, u32& idx_begin, u32& idx_end) = 0;
-		virtual void		done(xworker_thread* thread, xactor*& actor, xmessage*& msg, u32& idx_begin, u32& idx_end) = 0;
+		virtual void		take(xworker* worker, xactor*& actor, xmessage*& msg, u32& idx_begin, u32& idx_end) = 0;
+		virtual void		done(xworker* worker, xactor*& actor, xmessage*& msg, u32& idx_begin, u32& idx_end) = 0;
 	};
 
 	class xsystem
