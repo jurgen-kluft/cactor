@@ -1,6 +1,5 @@
 #include "xbase/x_allocator.h"
 #include "xactor/x_actor.h"
-#include "xthread/x_semaphore.h"
 
 #ifdef TARGET_PC
 	#include <windows.h>
@@ -11,14 +10,23 @@
 
 namespace xcore
 {
-	class xworker
+	// Handling a message and figuring out what function to call on the
+	// receiving actor.
+	// An actor can register message handlers by first registering the
+	// message struct
+
+	class my_message : public xmessage
 	{
+	protected:
+		//XACTOR_DECLARE_MESSAGE(my_message);
+
+		s32					m_my_data1;
+		f32					m_my_data2;
+
 	public:
-		virtual bool		quit() const = 0;
-		virtual void		run(xwork*) = 0;
+		
 	};
 
-	
 	class s32atomic
 	{
 		std::atomic<s32> m_value;
@@ -30,14 +38,22 @@ namespace xcore
 	class s64atomic
 	{
 		std::atomic<s64> m_value;
+
 	public:
 		s64				load() { return m_value.load(); }
 		bool			cas(s64 old, s64 _new) { return m_value.compare_exchange_weak(old, _new); }
 	};
 
+	// We base the receiving of messages on simple structs, messages are
+	// always send back to the sender for garbage collection to simplify
+	// creation, re-use and destruction of messages.
 
 	// There are a fixed number of worker-threads, initialized according to what
-	// the user needs. 
+	// the user needs. The user can use the xsystem package to identify how
+	// many physical and logical cores this machine has as well as how many
+	// hardware threads.
+
+	// C 1 | R 20 | RW 20 | W 20
 
 	const u64 WRITE_INDEX_SHIFT = 0;
 	const u64 WRITE_INDEX_BITS = 20;
@@ -134,6 +150,11 @@ namespace xcore
 		xqueue		m_queue;
 	
 	public:
+		void				init(x_iallocator* allocator, s32 max_messages)
+		{
+
+		}
+
 		virtual s32			push(xmessage* msg)
 		{
 			void * p = (void *)msg;
@@ -212,17 +233,57 @@ namespace xcore
 		return 0;
 	}
 
+	class xsemaphore_imp : public xsemaphore
+	{
+		HANDLE				ghSemaphore;
+
+	public:
+		virtual void		setup(s32 initial, s32 maximum)
+		{
+			ghSemaphore = ::CreateSemaphore(
+				NULL,           // default security attributes
+				initial,		// initial count
+				maximum,		// maximum count
+				NULL);          // unnamed semaphore
+		}
+
+		virtual void		teardown()
+		{
+			CloseHandle(ghSemaphore);
+		}
+
+		virtual void		request()
+		{
+			DWORD dwWaitResult = WaitForSingleObject(ghSemaphore, INFINITE);
+			switch (dwWaitResult)
+			{
+			case WAIT_OBJECT_0:	// The semaphore object was signaled.
+
+				break;
+			case WAIT_FAILED:
+				break;
+			}
+		}
+
+		virtual void		release()
+		{
+			::ReleaseSemaphore( ghSemaphore/*handle to semaphore*/, 1 /*increase count by one*/, NULL);
+		}
+
+		XCORE_CLASS_PLACEMENT_NEW_DELETE
+	};
+
 	class xwork_queue
 	{
 		xqueue				m_queue;
-		xsemaphore*			m_sema;
+
 	public:
 		void				initialize(x_iallocator* allocator, s32 max_actors)
 		{
 			void** queue = (void**)allocator->allocate(sizeof(void*) * max_actors, sizeof(void*));
 			m_queue.init(queue, max_actors);
 
-			x_type_allocator<xsemaphore> sema_type(allocator);
+			x_type_allocator<xsemaphore_imp> sema_type(allocator);
 			m_sema = sema_type.allocate();
 		}
 
@@ -230,16 +291,18 @@ namespace xcore
 		{
 			void * p = (void *)actor;
 			m_queue.push(p);
-			m_sema->signal();
+			m_sema->release();
 		}
 
 		void				pop(xactor*& actor)
 		{
 			void * p;
-			m_sema->wait();
+			m_sema->request();
 			m_queue.pop(p);
 			actor = (xactor*)p;
 		}
+
+		xsemaphore*			m_sema;
 	};
 
 	class xwork_imp : public xwork
@@ -266,7 +329,7 @@ namespace xcore
 			}
 		}
 
-		void				take(xworker* worker, xactor*& actor, xmessage*& msg, u32& msgidx, u32& msgend)
+		void				take(xworker_thread* thread, xactor*& actor, xmessage*& msg, u32& msgidx, u32& msgend)
 		{
 			if (actor == NULL)
 			{
@@ -285,7 +348,7 @@ namespace xcore
 			}
 		}
 
-		void				done(xworker* worker, xactor*& actor, xmessage*& msg, u32& msgidx, u32& msgend)
+		void				done(xworker_thread* thread, xactor*& actor, xmessage*& msg, u32& msgidx, u32& msgend)
 		{
 			// If 'msgidx == msgend' then try and add the actor back to the work-queue since
 			// it was the last message we supposed to have processed.
@@ -302,30 +365,31 @@ namespace xcore
 			}
 			msg = NULL;
 		}
+
 	};
 
 	class xworker_imp: public xworker
 	{
 	public:
-		void				run(xwork* work)
+		void				run(xworker_thread* thread, xwork* work)
 		{
 			u32 i, e;
 			xactor* actor;
 			xmessage* msg;
 
-			while (quit()==false)
+			while (thread->quit()==false)
 			{
 				// Try and take an [actor, message] piece of work
-				work->take(this, actor, msg, i, e);
+				work->take(thread, actor, msg, i, e);
 				
 				// Let the actor handle the message
 				if (msg->is_recipient(actor))
 				{
-					actor->received(msg);
+					actor->process(msg);
 					if (msg->is_sender(actor))
 					{
 						// Garbage collect the message immediately
-						actor->returned(msg);
+						actor->gc(msg);
 					}
 					else 
 					{
@@ -335,11 +399,11 @@ namespace xcore
 				}
 				else if (msg->is_sender(actor))
 				{
-					actor->returned(msg);
+					actor->gc(msg);
 				}
 
 				// Report the [actor, message] back as 'done'
-				work->done(this, actor, msg, i, e);
+				work->done(thread, actor, msg, i, e);
 			}
 		}
 	};
