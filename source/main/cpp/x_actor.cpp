@@ -10,38 +10,12 @@
 
 namespace xcore
 {
-	// Handling a message and figuring out what function to call on the
-	// receiving actor.
-	// An actor can register message handlers by first registering the
-	// message struct
-
-	class my_message : public xmessage
-	{
-	protected:
-		//XACTOR_DECLARE_MESSAGE(my_message);
-
-		s32					m_my_data1;
-		f32					m_my_data2;
-
-	public:
-		
-	};
-
 	class s32atomic
 	{
 		std::atomic<s32> m_value;
 	public:
 		s32				load() { return m_value.load(); }
 		bool			cas(s32 old, s32 _new) { return m_value.compare_exchange_weak(old, _new); }
-	};
-
-	class s64atomic
-	{
-		std::atomic<s64> m_value;
-
-	public:
-		s64				load() { return m_value.load(); }
-		bool			cas(s64 old, s64 _new) { return m_value.compare_exchange_weak(old, _new); }
 	};
 
 	// We base the receiving of messages on simple structs, messages are
@@ -53,35 +27,49 @@ namespace xcore
 	// many physical and logical cores this machine has as well as how many
 	// hardware threads.
 
-	// C 1 | R 20 | RW 20 | W 20
+	// C 1 | R 15 | W 15
 
-	const u64 WRITE_INDEX_SHIFT = 0;
-	const u64 WRITE_INDEX_BITS = 20;
-	const u64 WRITE_INDEX_MASK = ((u64(1) << WRITE_INDEX_BITS) - 1) << WRITE_INDEX_SHIFT;
-	const u64 READ_INDEX_SHIFT = 20;
-	const u64 READ_INDEX_BITS = 20;
-	const u64 READ_INDEX_MASK = ((u64(1) << READ_INDEX_BITS) - 1) << READ_INDEX_SHIFT;
-	const u64 QUEUED_FLAG_SHIFT = 62;
-	const u64 QUEUED_FLAG = u64(1) << QUEUED_FLAG_SHIFT;
+	const u32 WRITE_INDEX_SHIFT = 0;
+	const u32 WRITE_INDEX_BITS = 12;
+	const u32 WRITE_INDEX_MASK = ((u32(1) << WRITE_INDEX_BITS) - 1) << WRITE_INDEX_SHIFT;
+	const u32 READ_INDEX_SHIFT = 16;
+	const u32 READ_INDEX_BITS = 12;
+	const u32 READ_INDEX_MASK = ((u32(1) << READ_INDEX_BITS) - 1) << READ_INDEX_SHIFT;
+	const u32 QUEUED_FLAG_SHIFT = 31;
+	const u32 QUEUED_FLAG = u32(1) << QUEUED_FLAG_SHIFT;
+	const u32 MAX_MESSAGES = (u32(1) << WRITE_INDEX_BITS);
 
+	// Queue using a lock-free ringbuffer, it is important that this queue
+	// is initialized with a size that never will be reached. This queue
+	// will fail HARD when messages are queued up and the size is exceeding
+	// the initialized size.
+	// The initialized size of this queue cannot exceed 4096 messages.
+	// When writing a system using this actor-model messages should be
+	// pre-allocated (bounded) and not dynamically allocated.
 	class xqueue
 	{
 		u32					m_size;
 		void**				m_queue;
-		s64atomic*			m_index;
+		s32atomic*			m_index;
 
 	public:
-		void				init(void** queue, s32 size)
+		void				init(x_iallocator* allocator, s32 max_messages)
 		{
-			m_queue = queue;
-			m_size = size;
-			m_index = 0;
+			m_queue = (void**)allocator->allocate(max_messages * sizeof(void*), sizeof(void*));
+			m_index = (s32atomic*)allocator->allocate(32, 32);
+			m_size = max_messages;
+		}
+
+		void				destroy(x_iallocator* allocator)
+		{
+			allocator->deallocate(m_index);
+			allocator->deallocate(m_queue);
 		}
 
 		virtual s32			push(void* p)
 		{
 			// We are pushing the message when the actor is QUEUED or NOT-QUEUED.
-			s64 i, n;
+			s32 i, n;
 			do {
 				i = m_index->load();
 				n = (i + 1) | QUEUED_FLAG;
@@ -98,17 +86,17 @@ namespace xcore
 
 		virtual void		pop(void*& p)
 		{
-			s64 i, n;
+			s32 i, n;
 			do {
 				i = m_index->load();
-				n = i + (s64(1) << READ_INDEX_SHIFT);
+				n = i + (s32(1) << READ_INDEX_SHIFT);
 			} while (!m_index->cas(i, n));
 			p = m_queue[(i - 1) & (m_size - 1)];
 		}
 
 		virtual void		claim(u32& idx, u32& end)
 		{
-			s64 i = m_index->load();
+			s32 i = m_index->load();
 			idx = u32((i & READ_INDEX_MASK) >> READ_INDEX_SHIFT);
 			end = u32((i & WRITE_INDEX_MASK) >> WRITE_INDEX_SHIFT);
 		}
@@ -125,7 +113,7 @@ namespace xcore
 			bool const do_mask = (end >= m_size);
 			u32 const read = do_mask ? end & (m_size - 1) : end;
 
-			s64 i,n;
+			s32 i,n;
 			do {
 				i = m_index->load();
 				u32 write = u32((i & WRITE_INDEX_MASK) >> WRITE_INDEX_SHIFT);
@@ -152,7 +140,6 @@ namespace xcore
 	public:
 		void				init(x_iallocator* allocator, s32 max_messages)
 		{
-
 		}
 
 		virtual s32			push(xmessage* msg)
@@ -276,6 +263,7 @@ namespace xcore
 	class xwork_queue
 	{
 		xqueue				m_queue;
+		xsemaphore*			m_sema;
 
 	public:
 		void				initialize(x_iallocator* allocator, s32 max_actors)
@@ -301,8 +289,6 @@ namespace xcore
 			m_queue.pop(p);
 			actor = (xactor*)p;
 		}
-
-		xsemaphore*			m_sema;
 	};
 
 	class xwork_imp : public xwork
@@ -310,11 +296,9 @@ namespace xcore
 		xwork_queue			m_queue;
 
 	public:
-		void				init(s32 max_actors)
+		void				init(x_iallocator* allocator, s32 max_actors)
 		{
-			// Initialize a ring buffer that can hold 'max_actors' and will act as the
-			// actual work queue.
-			// Create semaphore with 'max_actors' as a maximum for the counter.
+			n_queue.initialize(allocator, max_actors);
 		}
 
 		// @Note: This can be called from multiple threads!
@@ -337,12 +321,13 @@ namespace xcore
 				m_queue.pop(actor);
 
 				xactor_mailbox* mb = static_cast<xactor_mailbox*>(actor->getmailbox());
+				// Claim a batch of messages to be processed here by this worker
 				mb->claim(msgidx, msgend);
 				mb->deque(msgidx, msgend, msg);
 			}
 			else
 			{
-				// Take the next message from the mailbox of the actor
+				// Take the next message out of the batch from the mailbox of the actor
 				xactor_mailbox* mb = static_cast<xactor_mailbox*>(actor->getmailbox());
 				mb->deque(msgidx, msgend, msg);
 			}
@@ -351,7 +336,7 @@ namespace xcore
 		void				done(xworker_thread* thread, xactor*& actor, xmessage*& msg, u32& msgidx, u32& msgend)
 		{
 			// If 'msgidx == msgend' then try and add the actor back to the work-queue since
-			// it was the last message we supposed to have processed.
+			// it was the last message we supposed to have processed from the batch.
 			if (msgidx == msgend)
 			{
 				xactor_mailbox* mb = static_cast<xactor_mailbox*>(actor->getmailbox());
@@ -365,7 +350,6 @@ namespace xcore
 			}
 			msg = NULL;
 		}
-
 	};
 
 	class xworker_imp: public xworker
