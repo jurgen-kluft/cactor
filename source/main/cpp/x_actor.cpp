@@ -66,13 +66,13 @@ namespace xcore
 			allocator->deallocate(m_queue);
 		}
 
-		virtual s32			push(void* p)
+		s32					push(void* p)
 		{
 			// We are pushing the message when the actor is QUEUED or NOT-QUEUED.
 			s32 i, n;
 			do {
 				i = m_index->load();
-				n = (i + 1) | QUEUED_FLAG;
+				n = ((i + 1) & WRITE_INDEX_MASK) | QUEUED_FLAG;
 			} while (!m_index->cas(i,n));
 
 			m_queue[i & (m_size-1)] = p;
@@ -84,30 +84,21 @@ namespace xcore
 			return queue;
 		}
 
-		virtual void		pop(void*& p)
-		{
-			s32 i, n;
-			do {
-				i = m_index->load();
-				n = i + (s32(1) << READ_INDEX_SHIFT);
-			} while (!m_index->cas(i, n));
-			p = m_queue[(i - 1) & (m_size - 1)];
-		}
 
-		virtual void		claim(u32& idx, u32& end)
+		void				claim(u32& idx, u32& end)
 		{
 			s32 i = m_index->load();
 			idx = u32((i & READ_INDEX_MASK) >> READ_INDEX_SHIFT);
 			end = u32((i & WRITE_INDEX_MASK) >> WRITE_INDEX_SHIFT);
 		}
 
-		virtual void		deque(u32& idx, u32 end, void*& p)
+		void				deque(u32& idx, u32 end, void*& p)
 		{
 			p = m_queue[idx & (m_size-1)];
 			idx += 1;
 		}
 
-		virtual s32			release(u32 idx, u32 end)
+		s32					release(u32 idx, u32 end)
 		{
 			// This is our new 'read' index
 			bool const do_mask = (end >= m_size);
