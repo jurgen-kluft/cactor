@@ -10,10 +10,10 @@
 
 namespace xcore
 {
-	class s32atomic
+	struct s32atomic
 	{
 		std::atomic<s32> m_value;
-	public:
+		void			store(s32 v) { m_value = v; }
 		s32				load() { return m_value.load(); }
 		bool			cas(s32 old, s32 _new) { return m_value.compare_exchange_weak(old, _new); }
 	};
@@ -35,9 +35,9 @@ namespace xcore
 	const u32 READ_INDEX_SHIFT = 16;
 	const u32 READ_INDEX_BITS = 12;
 	const u32 READ_INDEX_MASK = ((u32(1) << READ_INDEX_BITS) - 1) << READ_INDEX_SHIFT;
-	const u32 QUEUED_FLAG_SHIFT = 31;
-	const u32 QUEUED_FLAG = u32(1) << QUEUED_FLAG_SHIFT;
 	const u32 MAX_MESSAGES = (u32(1) << WRITE_INDEX_BITS);
+	// const u32 QUEUED_FLAG_SHIFT = 31;
+	// const u32 QUEUED_FLAG = u32(1) << QUEUED_FLAG_SHIFT;
 
 	// Queue using a lock-free ringbuffer, it is important that this queue
 	// is initialized with a size that never will be reached. This queue
@@ -50,77 +50,89 @@ namespace xcore
 	{
 		u32					m_size;
 		void**				m_queue;
-		s32atomic*			m_index;
+		s32atomic*			m_readwrite;
+		s32atomic*			m_writeclaim;
 
 	public:
 		void				init(x_iallocator* allocator, s32 max_messages)
 		{
 			m_queue = (void**)allocator->allocate(max_messages * sizeof(void*), sizeof(void*));
-			m_index = (s32atomic*)allocator->allocate(32, 32);
 			m_size = max_messages;
+			m_readwrite = (s32atomic*)allocator->allocate(32, 32);
+			m_writeclaim = (s32atomic*)allocator->allocate(32, 32);
+			m_readwrite->store(0);
+			m_writeclaim->store(0);
 		}
 
 		void				destroy(x_iallocator* allocator)
 		{
-			allocator->deallocate(m_index);
 			allocator->deallocate(m_queue);
+			allocator->deallocate(m_readwrite);
+			allocator->deallocate(m_writeclaim);
 		}
 
+		// This can be entered by multiple 'producers'
 		s32					push(void* p)
 		{
-			// We are pushing the message when the actor is QUEUED or NOT-QUEUED.
-			s32 i, n;
+			// write claim -->  write commit
+			s32 cw, nw;
 			do {
-				i = m_index->load();
-				n = ((i + 1) & WRITE_INDEX_MASK) | QUEUED_FLAG;
-			} while (!m_index->cas(i,n));
+				cw = m_writeclaim->load();
+				nw = cw + 1;
+			} while (!m_writeclaim->cas(cw, nw));
 
-			m_queue[i & (m_size-1)] = p;
+			m_queue[cw & (m_size - 1)] = p;
 
-			// Did we push a message and the actor is not queued ?
-			// If so we need to signal the caller that it should
-			// queue the actor. We already set the QUEUED_FLAG.
-			s32 const queue = ((i & QUEUED_FLAG) == (n & QUEUED_FLAG)) ? 0 : 1;
-			return queue;
+			s32 crw, nrw;
+			do {
+				crw = m_readwrite->load();
+				crw = (crw & READ_INDEX_MASK) | (cw & WRITE_INDEX_MASK);
+				nrw = (crw & READ_INDEX_MASK) | (nw & WRITE_INDEX_MASK);
+			} while (!m_readwrite->cas(crw, nrw));
+
+			// If the QUEUD flag was 'false' and we have pushed a new piece of work into
+			// the queue and before the queue was empty we are the one that should return
+			// '1' to indicate that the actor should be queued-up for processing.
+			s32 const wi = (crw & WRITE_INDEX_MASK) >> WRITE_INDEX_SHIFT;
+			s32 const ri = (crw & READ_INDEX_MASK ) >> READ_INDEX_SHIFT;
+			return (ri == wi) ? 1 : 0;
 		}
-
 
 		void				claim(u32& idx, u32& end)
 		{
-			s32 i = m_index->load();
+			s32 i = m_readwrite->load();
 			idx = u32((i & READ_INDEX_MASK) >> READ_INDEX_SHIFT);
 			end = u32((i & WRITE_INDEX_MASK) >> WRITE_INDEX_SHIFT);
 		}
 
 		void				deque(u32& idx, u32 end, void*& p)
 		{
-			p = m_queue[idx & (m_size-1)];
-			idx += 1;
+			p = m_queue[idx & (m_size - 1)];
+			idx++;
 		}
 
 		s32					release(u32 idx, u32 end)
 		{
+			// There is only one 'consumer'
 			// This is our new 'read' index
-			bool const do_mask = (end >= m_size);
-			u32 const read = do_mask ? end & (m_size - 1) : end;
+			u32 const r = end & (m_size - 1);
 
-			s32 i,n;
+			s32 q=0;
 			do {
-				i = m_index->load();
-				u32 write = u32((i & WRITE_INDEX_MASK) >> WRITE_INDEX_SHIFT);
-				if (do_mask)
-				{
-					write = write && (m_size - 1);
+				s32 i = m_readwrite->load();
+				u32 w = u32((i & WRITE_INDEX_MASK) >> WRITE_INDEX_SHIFT);
+				s32 n = ((r & READ_INDEX_MASK) << READ_INDEX_SHIFT) | (w << WRITE_INDEX_SHIFT);
+				if (r != w)
+				{	// Indicate that the actor should be queued, since we have pushed a message
+					// into an empty queue.
+					q = 1;
 				}
-				n = ((read & READ_INDEX_MASK) << READ_INDEX_SHIFT) | (write << WRITE_INDEX_SHIFT);
-				if (read < write)
-				{	// Let ourselves be queued since we have more messages to process
-					n |= QUEUED_FLAG;
-				}
-			} while (!m_index->cas(i, n));
+			} while (!m_readwrite->cas(i, n));
 
-			// So we now have updated 'm_index' with 'read'/'write' and have succesfully updated the QUEUED_FLAG (set or unset)
-			return (n & QUEUED_FLAG) == 0 ? 0 : 1;
+			// So we now have updated 'm_readwrite' with 'read'/'write' and detected that we have
+			// pushed a message into an empty queue, so we are the ones to indicate that the actor
+			// should be queued.
+			return q;
 		}
 	};
 
