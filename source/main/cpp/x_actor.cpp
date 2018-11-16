@@ -177,8 +177,8 @@ namespace xcore
 			m_actor = actor;
 			m_work = work;
 
-			x_type_allocator<xmessageslf> xmessages_type(allocator);
-			m_messages = xmessages_type.allocate();
+			xheap<xmessageslf> xmessages_heap(allocator);
+			m_messages = xnew<xmessageslf>(xmessages_heap);
 
 		}
 
@@ -274,8 +274,8 @@ namespace xcore
 			void** queue = (void**)allocator->allocate(sizeof(void*) * max_actors, sizeof(void*));
 			m_queue.init(queue, max_actors);
 
-			x_type_allocator<xsemaphore_imp> sema_type(allocator);
-			m_sema = sema_type.allocate();
+			xheap<xsemaphore_imp> sema_heap(allocator);
+			m_sema = xnew<xsemaphore_imp>(sema_heap);
 		}
 
 		void				push(xactor* actor)
