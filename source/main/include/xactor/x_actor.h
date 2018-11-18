@@ -20,7 +20,7 @@ namespace xcore
 	// For messages we can have one allocator per actor for sending messages.
 	// This makes the actor be able to control/limit the messages that it
 	// creates and sends.
-	// The necessary information for a messages is where the message came
+	// The necessary information for a message is where the message came
 	// from so that the receiving actor can send a message back to the
 	// sender.
 	// We base the receiving of messages on simple structs, messages are
