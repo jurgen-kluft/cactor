@@ -27,6 +27,8 @@ namespace xcore
 	// always send back to the sender for garbage collection to simplify
 	// creation, re-use and destruction of messages.
 
+	msg_id_t		xmsgid(const char*);
+
 	class xmessage
 	{
 	public:
@@ -35,6 +37,8 @@ namespace xcore
 
 		xactor*				get_sender() const				{ return m_sender; }
 		xactor*				get_recipient() const			{ return m_recipient; }
+
+		bool				has_id(msg_id_t _id) const		{ return m_id == _id; }
 
 	protected:
 		msg_id_t			m_id;
@@ -61,21 +65,11 @@ namespace xcore
 	{
 	public:
 		virtual void		setmailbox(xmailbox* mailbox) = 0;
-		virtual xmailbox*	getmailbox() = 0;
 
 		virtual void		received(xmessage* msg) = 0;
 		virtual void		returned(xmessage*& msg) = 0;
 	};
 
-	class xwork
-	{
-	public:
-		virtual void		add(xactor* sender, xmessage* msg, xactor* recipient) = 0;
-
-		virtual void		queue(xactor* actor) = 0;
-		virtual void		take(xworker* worker, xactor*& actor, xmessage*& msg, u32& idx_begin, u32& idx_end) = 0;
-		virtual void		done(xworker* worker, xactor*& actor, xmessage*& msg, u32& idx_begin, u32& idx_end) = 0;
-	};
 
 	class xsystem
 	{
@@ -85,11 +79,9 @@ namespace xcore
 
 		virtual void		join(xactor* actor) = 0;
 		virtual void		leave(xactor* actor) = 0;
-
-		virtual void		send(xmessage* msg, xactor* recipient) = 0;
 	};
 
-	void				send(xactor* sender, xmessage* msg, xactor* recipient);
+	void				send(xsystem* system, xactor* sender, xmessage* msg, xactor* recipient);
 
 } // namespace xcore
 

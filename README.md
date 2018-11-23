@@ -12,3 +12,55 @@ A tiny actor library focussing mainly on performance which means that:
 * There is only one threading primitive instance in a single actor-system, a semaphore. The mailbox and
   work queue is implemented using lock-free programming.
 
+    struct mydatamessage : public xmessage
+    {
+        void    setup(xactor* from, xactor* to, msg_id_t id);
+        xbyte   m_data[64];
+    };
+
+	class myactor1 : public xactor
+	{
+        msg_id_t                 m_data_msg_id;
+        xfreelist<mydatamessage> m_data_msgs;
+
+        xmailbox*           m_mbox;
+
+	public:
+        virtual void		setmailbox(xmailbox* mailbox)
+        {
+
+        }
+
+		virtual void		received(xmessage* msg)
+        {
+            // Inspect the message and react
+
+            // Send a message back to that actor
+            mydatamessage* msg_to_send = m_data_msgs.pop();
+            
+            // Fill in the data
+
+            // Send it to the recipient of the incoming message
+            m_mbox->send(msg_to_send, msg->get_recipient());
+        }
+
+		virtual void		returned(xmessage*& msg)
+        {
+            if (msg->has_id(m_data_msg_id))
+            {
+                m_data_msgs.push(msg);
+            }
+
+            // Custom code
+        }
+	};
+
+
+xsystem*    system = xsystem::boot(2);
+
+xactor*     actor1 = xnew<myactor1>();
+xactor*     actor2 = xnew<myactor2>();
+
+system->join(actor1);
+system->join(actor2);
+
