@@ -122,6 +122,8 @@ namespace xcore
 				s32 i = m_readwrite->load();
 				u32 w = u32((i & WRITE_INDEX_MASK) >> WRITE_INDEX_SHIFT);
 				s32 n = ((r & READ_INDEX_MASK) << READ_INDEX_SHIFT) | (w << WRITE_INDEX_SHIFT);
+				
+				q = 0;
 				if (r != w)
 				{	// Indicate that the actor should be queued, since we have pushed a message
 					// into an empty queue.
@@ -183,6 +185,10 @@ namespace xcore
 	class xactor_mailbox : public xmailbox
 	{
 	public:
+		xactor *            m_actor;
+		xwork *             m_work;
+		xmessages *         m_messages;
+
 		void				initialize(xactor* actor, xwork* work, x_iallocator* allocator, s32 max_messages)
 		{
 			m_actor = actor;
@@ -193,8 +199,6 @@ namespace xcore
 
 		}
 
-		xactor *			m_actor;
-		xwork *				m_work;
 		virtual void		send(xmessage* msg, xactor* recipient)
 		{
 			m_work->add(m_actor, msg, recipient);
@@ -204,8 +208,6 @@ namespace xcore
 		void				claim(u32& idx, u32& end);					// return [i,end] range of messages
 		void				deque(u32& idx, u32 end, xmessage*& msg);
 		s32					release(u32 idx, u32 end);				// return 1 when there are messages pending
-
-		xmessages *			m_messages;
 	};
 
 	s32		xactor_mailbox::push(xmessage* msg)
@@ -371,9 +373,11 @@ namespace xcore
 	public:
 		void				run(xworker_thread* thread, xwork* work)
 		{
-			u32 i, e;
-			xactor* actor;
-			xmessage* msg;
+			u32 i = 0;
+			u32 e = 0;
+
+			xactor* actor = nullptr;
+			xmessage* msg = nullptr;
 
 			while (thread->quit()==false)
 			{
