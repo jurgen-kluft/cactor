@@ -31,7 +31,7 @@ A tiny actor library focussing mainly on performance which means that:
     public:
         virtual void setmailbox(xmailbox* mailbox)
         {
-
+            m_mbox = mailbox;
         }
 
         virtual void received(xmessage* msg)
@@ -47,7 +47,7 @@ A tiny actor library focussing mainly on performance which means that:
             m_mbox->send(msg_to_send, msg->get_recipient());
         }
 
-        virtual void  returned(xmessage*& msg)
+        virtual void returned(xmessage*& msg)
         {
             if (msg->has_id(m_data_msg_id))
             {
