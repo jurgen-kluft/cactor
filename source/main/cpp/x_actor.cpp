@@ -4,7 +4,6 @@
 #ifdef TARGET_PC
 #include <windows.h>
 #include <stdio.h>
-#include <atomic>
 #endif
 
 // Actor Model:
@@ -14,13 +13,70 @@
 
 namespace xcore
 {
-    struct s32atomic
+    class xisemaphore
     {
-        std::atomic<s32> m_value;
-        void             store(s32 v) { m_value = v; }
-        s32              load() { return m_value.load(); }
-        bool             cas(s32 old, s32 _new) { return m_value.compare_exchange_weak(old, _new); }
+    public:
+        virtual void setup(s32 initial, s32 maximum) = 0;
+        virtual void teardown()                      = 0;
+
+        virtual void request() = 0;
+        virtual void release() = 0;
     };
+    class ximutex
+    {
+    public:
+        virtual void setup()    = 0;
+        virtual void teardown() = 0;
+
+        virtual void lock()   = 0;
+        virtual void unlock() = 0;
+    };
+
+#ifdef TARGET_PC
+    class xsemaphore : public xisemaphore
+    {
+        HANDLE ghSemaphore;
+
+    public:
+        virtual void setup(s32 initial, s32 maximum)
+        {
+            ghSemaphore = ::CreateSemaphore(NULL,    // default security attributes
+                                            initial, // initial count
+                                            maximum, // maximum count
+                                            NULL);   // unnamed semaphore
+        }
+
+        virtual void teardown() { CloseHandle(ghSemaphore); }
+        virtual void request()
+        {
+            DWORD dwWaitResult = WaitForSingleObject(ghSemaphore, INFINITE);
+            switch (dwWaitResult)
+            {
+                case WAIT_OBJECT_0: break; // The semaphore object was signaled.
+                case WAIT_FAILED: break;
+            }
+        }
+        virtual void release() { ::ReleaseSemaphore(ghSemaphore /*handle to semaphore*/, 1 /*increase count by one*/, NULL); }
+
+        XCORE_CLASS_PLACEMENT_NEW_DELETE
+    };
+
+    class xmutex : public ximutex
+    {
+        CRITICAL_SECTION ghMutex;
+
+    public:
+        virtual void setup()
+        {
+            InitializeCriticalSectionAndSpinCount((CRITICAL_SECTION*)&ghMutex, 4000);
+        }
+        virtual void teardown() { DeleteCriticalSection((CRITICAL_SECTION*)&ghMutex); }
+        virtual void lock() { EnterCriticalSection((CRITICAL_SECTION*)&ghMutex); }
+        virtual void unlock() { LeaveCriticalSection((CRITICAL_SECTION*)&ghMutex); }
+
+        XCORE_CLASS_PLACEMENT_NEW_DELETE
+    };
+#endif
 
     class xworker_thread
     {
@@ -49,7 +105,7 @@ namespace xcore
     // const u32 QUEUED_FLAG_SHIFT = 31;
     // const u32 QUEUED_FLAG = u32(1) << QUEUED_FLAG_SHIFT;
 
-    // Queue using a lock-free ringbuffer, it is important that this queue
+    // Queue using a ringbuffer, it is important that this queue
     // is initialized with a size that will never be reached. This queue
     // will fail HARD when messages are queued up and the size is exceeding
     // the initialized size.
@@ -60,32 +116,27 @@ namespace xcore
     {
         u32 const  m_size;
         void**     m_queue;
-        s32atomic* m_readwrite;
-        s32atomic* m_writeclaim;
+        s32        m_readwrite;
+        xmutex     m_lock;
 
     public:
         inline xqueue(u32 size)
             : m_size(size)
             , m_queue(nullptr)
-            , m_readwrite(nullptr)
-            , m_writeclaim(nullptr)
+            , m_readwrite(0)
         {
         }
 
         void init(xalloc* allocator)
         {
             m_queue      = (void**)allocator->allocate(m_size * sizeof(void*), sizeof(void*));
-            m_readwrite  = (s32atomic*)allocator->allocate(32, 32);
-            m_writeclaim = (s32atomic*)allocator->allocate(32, 32);
-            m_readwrite->store(0);
-            m_writeclaim->store(0);
+            m_lock.setup();
         }
 
         void destroy(xalloc* allocator)
         {
             allocator->deallocate(m_queue);
-            allocator->deallocate(m_readwrite);
-            allocator->deallocate(m_writeclaim);
+            m_lock.teardown();
         }
 
         inline u32 size() const { return m_size; }
@@ -93,23 +144,14 @@ namespace xcore
         // This can be entered by multiple 'producers'
         s32 push(void* p)
         {
-            // write claim -->  write commit
-            s32 cw, nw;
-            do
-            {
-                cw = m_writeclaim->load();
-                nw = cw + 1;
-            } while (!m_writeclaim->cas(cw, nw));
-
-            m_queue[cw & (m_size - 1)] = p;
-
-            s32 crw, nrw; // current and new read-write
-            do
-            {
-                crw = m_readwrite->load();
-                crw = (crw & READ_INDEX_MASK) | (cw & WRITE_INDEX_MASK);
-                nrw = (crw & READ_INDEX_MASK) | (nw & WRITE_INDEX_MASK);
-            } while (!m_readwrite->cas(crw, nrw));
+            m_lock.lock();
+            s32 const crw = m_readwrite;
+            s32 const cw  = (crw & WRITE_INDEX_MASK);
+            s32 const nw  = cw + 1;
+            s32 const nrw = (crw & READ_INDEX_MASK) | (nw & WRITE_INDEX_MASK);
+            m_readwrite = nrw;
+            m_queue[cw] = p;
+            m_lock.unlock();
 
             // If the QUEUED flag was 'false' and we have pushed a new piece of work into
             // the queue and before the queue was empty we are the one that should return
@@ -121,7 +163,9 @@ namespace xcore
 
         void claim(u32& idx, u32& end)
         {
-            s32 i = m_readwrite->load();
+            m_lock.lock();
+            s32 i = m_readwrite;
+            m_lock.unlock();
             idx   = u32((i & READ_INDEX_MASK) >> READ_INDEX_SHIFT);
             end   = u32((i & WRITE_INDEX_MASK) >> WRITE_INDEX_SHIFT);
         }
@@ -137,23 +181,13 @@ namespace xcore
             // There is only one 'consumer'
             // This is our new 'read' index
             u32 const r = end & (m_size - 1);
-
-            s32 q = 0;
-            s32 i, n;
-            u32 w;
-            do
-            {
-                i = m_readwrite->load();
-                w = u32((i & WRITE_INDEX_MASK) >> WRITE_INDEX_SHIFT);
-                n = ((r & READ_INDEX_MASK) << READ_INDEX_SHIFT) | (w << WRITE_INDEX_SHIFT);
-
-                q = 0;
-                if (r != w)
-                { // Indicate that the actor should be queued, since we have pushed a message
-                    // into an empty queue.
-                    q = 1;
-                }
-            } while (!m_readwrite->cas(i, n));
+            m_lock.lock();
+            s32 o = m_readwrite;
+            s32 w = u32((o & WRITE_INDEX_MASK) >> WRITE_INDEX_SHIFT);
+            s32 n = ((r & READ_INDEX_MASK) << READ_INDEX_SHIFT) | (w << WRITE_INDEX_SHIFT);
+            s32 const q = (r != w);
+            m_readwrite = n;
+            m_lock.unlock();
 
             // So we now have updated 'm_readwrite' with 'read'/'write' and detected that we have
             // pushed a message into an empty queue, so we are the ones to indicate that the actor
@@ -162,12 +196,12 @@ namespace xcore
         }
     };
 
-    class xmessageslf : public xmessages
+    class xmessages_imp : public xmessages
     {
         xqueue m_queue;
 
     public:
-        inline xmessageslf(u32 size)
+        inline xmessages_imp(u32 size)
             : m_queue(size)
         {
         }
@@ -209,12 +243,16 @@ namespace xcore
         xwork*     m_work;
         xmessages* m_messages;
 
-        void initialize(xactor* actor, xwork* work, xalloc* allocator, s32 max_messages)
+        void setup(xactor* actor, xwork* work, xalloc* allocator, s32 max_messages)
         {
             m_actor = actor;
             m_work  = work;
-
             m_messages = allocator->construct<xmessageslf>();
+        }
+
+        void teardown()
+        {
+
         }
 
         virtual void send(xmessage* msg, xactor* recipient) { m_work->add(m_actor, msg, recipient); }
@@ -225,104 +263,62 @@ namespace xcore
         s32  release(u32 idx, u32 end); // return 1 when there are messages pending
     };
 
-    s32 xactor_mailbox::push(xmessage* msg)
-    {
-        if (m_messages->push(msg) > 0)
-        {
-            return 1;
-        }
-        return 0;
-    }
-
+    s32 xactor_mailbox::push(xmessage* msg) { return (m_messages->push(msg)); }
     void xactor_mailbox::claim(u32& idx, u32& end) { m_messages->claim(idx, end); }
-
     void xactor_mailbox::deque(u32& idx, u32 end, xmessage*& msg) { m_messages->deque(idx, end, msg); }
-
-    s32 xactor_mailbox::release(u32 idx, u32 end)
-    {
-        if (m_messages->release(idx, end) > 0)
-        {
-            return 1;
-        }
-        return 0;
-    }
-
-    class xsemaphore
-    {
-    public:
-        virtual void setup(s32 initial, s32 maximum) = 0;
-        virtual void teardown()                      = 0;
-
-        virtual void request() = 0;
-        virtual void release() = 0;
-    };
-
-    class xsemaphore_imp : public xsemaphore
-    {
-        HANDLE ghSemaphore;
-
-    public:
-        virtual void setup(s32 initial, s32 maximum)
-        {
-            ghSemaphore = ::CreateSemaphore(NULL,    // default security attributes
-                                            initial, // initial count
-                                            maximum, // maximum count
-                                            NULL);   // unnamed semaphore
-        }
-
-        virtual void teardown() { CloseHandle(ghSemaphore); }
-
-        virtual void request()
-        {
-            DWORD dwWaitResult = WaitForSingleObject(ghSemaphore, INFINITE);
-            switch (dwWaitResult)
-            {
-                case WAIT_OBJECT_0: // The semaphore object was signaled.
-
-                    break;
-                case WAIT_FAILED: break;
-            }
-        }
-
-        virtual void release() { ::ReleaseSemaphore(ghSemaphore /*handle to semaphore*/, 1 /*increase count by one*/, NULL); }
-
-        XCORE_CLASS_PLACEMENT_NEW_DELETE
-    };
+    s32 xactor_mailbox::release(u32 idx, u32 end) { return (m_messages->release(idx, end)); }
 
     class xwork_queue
     {
-		s32atomic*  m_read;
-		s32atomic*  m_write;
-		xactor**    m_work;
-		u32         m_size;
-		xsemaphore* m_sema;
+		s32            m_read;
+		s32            m_write;
+        xmutex         m_lock;
+		xactor**       m_work;
+		xsemaphore     m_sema;
+		u32            m_size;
 
     public:
         inline xwork_queue(u32 size)
-            : m_size(size)
+            : m_read(0)
+            , m_write(0)
+            , m_work(nullptr)
+            , m_size(size)
             , m_sema(nullptr)
         {
         }
 
-        void initialize(xalloc* allocator)
+        void setup(xalloc* allocator, int max_actors)
         {
 			m_work = (xactor**)allocator->allocate(sizeof(void*) * m_size);
-            m_sema = allocator->construct<xsemaphore_imp>();
+            m_sema.setup(0, max_actors);
+            m_lock.setup();
+        }
+
+        void teardown()
+        {
+            m_sema.teardown();
+            m_lock.teardown();
         }
 
         void push(xactor* actor)
         {
-			s32 
-
+            m_lock.lock();
+            s32 cw = m_write;
+            s32 nw = (cw + 1);
+            m_work[cw & (m_size - 1)] = p;
+            m_write = nw;
+            m_lock.unlock();
             m_sema->release();
         }
 
         void pop(xactor*& actor)
         {
-            void* p;
             m_sema->request();
-            m_queue.pop(p);
-            actor = (xactor*)p;
+            m_lock.lock();
+            s32 const ri = m_read;
+            m_read += 1;
+            actor = m_work[ri & (m_size-1)];
+            m_lock.unlock();
         }
     };
 

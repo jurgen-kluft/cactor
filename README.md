@@ -9,8 +9,6 @@ A tiny actor library focussing mainly on performance which means that:
 * Message will be send back to sender in xactor::returned(xmessage*) (re-use/performance)
 * Actor receives messages in xactor::received(xmessage*), actor has to switch:case on the message
   type manually. (simplicity/performance)
-* There is only one threading primitive instance in a single actor-system, a semaphore. The mailbox and
-  work queue is implemented using lock-free programming.
 
 ```c++
     struct mydatamessage : public xmessage
