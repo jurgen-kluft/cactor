@@ -66,10 +66,7 @@ namespace xcore
         CRITICAL_SECTION ghMutex;
 
     public:
-        virtual void setup()
-        {
-            InitializeCriticalSectionAndSpinCount((CRITICAL_SECTION*)&ghMutex, 4000);
-        }
+        virtual void setup() { InitializeCriticalSectionAndSpinCount((CRITICAL_SECTION*)&ghMutex, 4000); }
         virtual void teardown() { DeleteCriticalSection((CRITICAL_SECTION*)&ghMutex); }
         virtual void lock() { EnterCriticalSection((CRITICAL_SECTION*)&ghMutex); }
         virtual void unlock() { LeaveCriticalSection((CRITICAL_SECTION*)&ghMutex); }
@@ -114,10 +111,10 @@ namespace xcore
     // pre-allocated (bounded) and not dynamically allocated.
     class xqueue
     {
-        u32 const  m_size;
-        void**     m_queue;
-        s32        m_readwrite;
-        xmutex     m_lock;
+        u32 const m_size;
+        void**    m_queue;
+        s32       m_readwrite;
+        xmutex    m_lock;
 
     public:
         inline xqueue(u32 size)
@@ -127,13 +124,13 @@ namespace xcore
         {
         }
 
-        void init(xalloc* allocator)
+        void init(alloc_t* allocator)
         {
-            m_queue      = (void**)allocator->allocate(m_size * sizeof(void*), sizeof(void*));
+            m_queue = (void**)allocator->allocate(m_size * sizeof(void*), sizeof(void*));
             m_lock.setup();
         }
 
-        void destroy(xalloc* allocator)
+        void destroy(alloc_t* allocator)
         {
             allocator->deallocate(m_queue);
             m_lock.teardown();
@@ -141,7 +138,7 @@ namespace xcore
 
         inline u32 size() const { return m_size; }
 
-        // This can be entered by multiple 'producers'
+        // Multiple 'producers'
         s32 push(void* p)
         {
             m_lock.lock();
@@ -149,8 +146,8 @@ namespace xcore
             s32 const cw  = (crw & WRITE_INDEX_MASK);
             s32 const nw  = cw + 1;
             s32 const nrw = (crw & READ_INDEX_MASK) | (nw & WRITE_INDEX_MASK);
-            m_readwrite = nrw;
-            m_queue[cw] = p;
+            m_readwrite   = nrw;
+            m_queue[cw]   = p;
             m_lock.unlock();
 
             // If the QUEUED flag was 'false' and we have pushed a new piece of work into
@@ -166,8 +163,8 @@ namespace xcore
             m_lock.lock();
             s32 i = m_readwrite;
             m_lock.unlock();
-            idx   = u32((i & READ_INDEX_MASK) >> READ_INDEX_SHIFT);
-            end   = u32((i & WRITE_INDEX_MASK) >> WRITE_INDEX_SHIFT);
+            idx = u32((i & READ_INDEX_MASK) >> READ_INDEX_SHIFT);
+            end = u32((i & WRITE_INDEX_MASK) >> WRITE_INDEX_SHIFT);
         }
 
         void deque(u32& idx, u32 end, void*& p)
@@ -182,9 +179,9 @@ namespace xcore
             // This is our new 'read' index
             u32 const r = end & (m_size - 1);
             m_lock.lock();
-            s32 o = m_readwrite;
-            s32 w = u32((o & WRITE_INDEX_MASK) >> WRITE_INDEX_SHIFT);
-            s32 n = ((r & READ_INDEX_MASK) << READ_INDEX_SHIFT) | (w << WRITE_INDEX_SHIFT);
+            s32       o = m_readwrite;
+            s32       w = u32((o & WRITE_INDEX_MASK) >> WRITE_INDEX_SHIFT);
+            s32       n = ((r & READ_INDEX_MASK) << READ_INDEX_SHIFT) | (w << WRITE_INDEX_SHIFT);
             s32 const q = (r != w);
             m_readwrite = n;
             m_lock.unlock();
@@ -196,17 +193,17 @@ namespace xcore
         }
     };
 
-    class xmessages_imp : public xmessages
+    class xmessage_queue: public xmessages
     {
         xqueue m_queue;
 
     public:
-        inline xmessages_imp(u32 size)
+        inline xmessage_queue(u32 size)
             : m_queue(size)
         {
         }
 
-        void init(xalloc* allocator) { m_queue.init(allocator); }
+        void init(alloc_t* allocator) { m_queue.init(allocator); }
 
         virtual s32 push(xmessage* msg)
         {
@@ -224,6 +221,8 @@ namespace xcore
         }
 
         virtual s32 release(u32 idx, u32 end) { return m_queue.release(idx, end); }
+
+        XCORE_CLASS_PLACEMENT_NEW_DELETE
     };
 
     class xwork
@@ -243,17 +242,14 @@ namespace xcore
         xwork*     m_work;
         xmessages* m_messages;
 
-        void setup(xactor* actor, xwork* work, xalloc* allocator, s32 max_messages)
+        void setup(xactor* actor, xwork* work, alloc_t* allocator, s32 max_messages)
         {
-            m_actor = actor;
-            m_work  = work;
-            m_messages = allocator->construct<xmessageslf>();
+            m_actor    = actor;
+            m_work     = work;
+            m_messages = allocator->construct<xmessage_queue>(max_messages);
         }
 
-        void teardown()
-        {
-
-        }
+        void teardown() {}
 
         virtual void send(xmessage* msg, xactor* recipient) { m_work->add(m_actor, msg, recipient); }
 
@@ -263,33 +259,34 @@ namespace xcore
         s32  release(u32 idx, u32 end); // return 1 when there are messages pending
     };
 
-    s32 xactor_mailbox::push(xmessage* msg) { return (m_messages->push(msg)); }
+    s32  xactor_mailbox::push(xmessage* msg) { return (m_messages->push(msg)); }
     void xactor_mailbox::claim(u32& idx, u32& end) { m_messages->claim(idx, end); }
     void xactor_mailbox::deque(u32& idx, u32 end, xmessage*& msg) { m_messages->deque(idx, end, msg); }
-    s32 xactor_mailbox::release(u32 idx, u32 end) { return (m_messages->release(idx, end)); }
+    s32  xactor_mailbox::release(u32 idx, u32 end) { return (m_messages->release(idx, end)); }
 
     class xwork_queue
     {
-		s32            m_read;
-		s32            m_write;
-        xmutex         m_lock;
-		xactor**       m_work;
-		xsemaphore     m_sema;
-		u32            m_size;
+        s32        m_read;
+        s32        m_write;
+        xmutex     m_lock;
+        xactor**   m_work;
+        xsemaphore m_sema;
+        u32        m_size;
 
     public:
         inline xwork_queue(u32 size)
             : m_read(0)
             , m_write(0)
+            , m_lock()
             , m_work(nullptr)
             , m_size(size)
-            , m_sema(nullptr)
+            , m_sema()
         {
         }
 
-        void setup(xalloc* allocator, int max_actors)
+        void setup(alloc_t* allocator, s32 max_actors)
         {
-			m_work = (xactor**)allocator->allocate(sizeof(void*) * m_size);
+            m_work = (xactor**)allocator->allocate(sizeof(void*) * m_size);
             m_sema.setup(0, max_actors);
             m_lock.setup();
         }
@@ -303,21 +300,21 @@ namespace xcore
         void push(xactor* actor)
         {
             m_lock.lock();
-            s32 cw = m_write;
-            s32 nw = (cw + 1);
-            m_work[cw & (m_size - 1)] = p;
-            m_write = nw;
+            s32 cw                    = m_write;
+            s32 nw                    = (cw + 1);
+            m_work[cw & (m_size - 1)] = actor;
+            m_write                   = nw;
             m_lock.unlock();
-            m_sema->release();
+            m_sema.release();
         }
 
         void pop(xactor*& actor)
         {
-            m_sema->request();
+            m_sema.request();
             m_lock.lock();
             s32 const ri = m_read;
             m_read += 1;
-            actor = m_work[ri & (m_size-1)];
+            actor = m_work[ri & (m_size - 1)];
             m_lock.unlock();
         }
     };
@@ -327,12 +324,12 @@ namespace xcore
         xwork_queue m_queue;
 
     public:
-        inline xwork_imp(u32 size)
-            : m_queue(size)
+        inline xwork_imp(u32 queue_size)
+            : m_queue(queue_size)
         {
         }
 
-        void init(xalloc* allocator) { m_queue.initialize(allocator); }
+        void init(alloc_t* allocator, s32 max_num_actors = 8) { m_queue.setup(allocator, max_num_actors); }
 
         // @Note: This can be called from multiple threads!
         void add(xactor* sender, xmessage* msg, xactor* recipient)

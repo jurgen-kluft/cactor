@@ -5,7 +5,7 @@
 
 using namespace xcore;
 
-UNITTEST_SUITE_BEGIN(xactor)
+UNITTEST_SUITE_BEGIN(xactor_unittest)
 {
 	UNITTEST_FIXTURE(main)
 	{
