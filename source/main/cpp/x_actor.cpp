@@ -6,6 +6,12 @@
 #include <stdio.h>
 #endif
 
+#ifdef TARGET_MAC
+#include <stdio.h>
+#include <mutex>
+#include <condition_variable>
+#endif
+
 // Actor Model:
 // - An actor is executed on one thread only
 // - Order of execution of messages is undetermined
@@ -70,6 +76,53 @@ namespace xcore
         virtual void teardown() { DeleteCriticalSection((CRITICAL_SECTION*)&ghMutex); }
         virtual void lock() { EnterCriticalSection((CRITICAL_SECTION*)&ghMutex); }
         virtual void unlock() { LeaveCriticalSection((CRITICAL_SECTION*)&ghMutex); }
+
+        XCORE_CLASS_PLACEMENT_NEW_DELETE
+    };
+#elif defined(TARGET_MAC)
+    class xsemaphore : public xisemaphore
+    {
+        size_t avail;
+        std::mutex m;
+        std::condition_variable cv;
+
+    public:
+        virtual void setup(s32 initial, s32 maximum)
+        {
+            avail=maximum;
+        }
+
+        virtual void teardown() 
+        { 
+
+        }
+
+        virtual void request()
+        {
+            std::unique_lock<std::mutex> lk(m);
+            cv.wait(lk, [this] { return avail > 0; });
+            avail--;
+        }
+
+        virtual void release() 
+        { 
+            std::lock_guard<std::mutex> lk(m);
+            avail++;
+            cv.notify_one();
+        }
+
+        XCORE_CLASS_PLACEMENT_NEW_DELETE
+    };
+
+    class xmutex : public ximutex
+    {
+        pthread_mutex_t ghMutex;
+
+    public:
+        virtual void setup() { pthread_mutex_init(&ghMutex,0); }
+        virtual void teardown() { pthread_mutex_destroy(&ghMutex); }
+        virtual void lock() { pthread_mutex_lock(&ghMutex); }
+        virtual void unlock() { pthread_mutex_unlock(&ghMutex); }
 
         XCORE_CLASS_PLACEMENT_NEW_DELETE
     };
