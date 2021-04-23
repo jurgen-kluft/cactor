@@ -434,50 +434,50 @@ namespace xcore
             msg = NULL;
         }
     };
-    class xworker
-    {
-    public:
-        virtual void run(xworker_thread* thread, xwork* work) = 0;
-    };
 
     class xworker_imp : public xworker
     {
     public:
+        void tick(xworker_thread* thread, xwork* work, ctxt_t* ctx)
+        {
+            // Try and take an [actor, message[i,e]] piece of work
+            work->take(this, ctx->m_actor, ctx->m_msg, ctx->m_i, ctx->m_e);
+
+            // Let the actor handle the message
+            if (ctx->m_msg->is_recipient(ctx->m_actor))
+            {
+                ctx->m_actor->received(ctx->m_msg);
+                if (ctx->m_msg->is_sender(ctx->m_actor))
+                {
+                    // Garbage collect the message immediately
+                    ctx->m_actor->returned(ctx->m_msg);
+                }
+                else
+                {
+                    // Send this message back to sender
+                    work->add(ctx->m_msg->get_recipient(), ctx->m_msg, ctx->m_msg->get_sender());
+                }
+            }
+            else if (ctx->m_msg->is_sender(ctx->m_actor))
+            {
+                ctx->m_actor->returned(ctx->m_msg);
+            }
+
+            // Report the [actor, message[i,e]] back as 'done'
+            work->done(this, ctx->m_actor, ctx->m_msg, ctx->m_i, ctx->m_e);
+        }
+
         void run(xworker_thread* thread, xwork* work)
         {
-            u32 i = 0;
-            u32 e = 0;
-
-            xactor*   actor = nullptr;
-            xmessage* msg   = nullptr;
+            ctxt_t ctx;
+            ctx.m_i = 0;
+            ctx.m_e = 0;
+            ctx.m_actor = nullptr;
+            ctx.m_msg   = nullptr;
 
             while (thread->quit() == false)
             {
-                // Try and take an [actor, message[i,e]] piece of work
-                work->take(this, actor, msg, i, e);
-
-                // Let the actor handle the message
-                if (msg->is_recipient(actor))
-                {
-                    actor->received(msg);
-                    if (msg->is_sender(actor))
-                    {
-                        // Garbage collect the message immediately
-                        actor->returned(msg);
-                    }
-                    else
-                    {
-                        // Send this message back to sender
-                        work->add(msg->get_recipient(), msg, msg->get_sender());
-                    }
-                }
-                else if (msg->is_sender(actor))
-                {
-                    actor->returned(msg);
-                }
-
-                // Report the [actor, message[i,e]] back as 'done'
-                work->done(this, actor, msg, i, e);
+                tick(thread, work, &ctx);
             }
         }
     };
