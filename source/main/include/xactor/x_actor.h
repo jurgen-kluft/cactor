@@ -10,11 +10,38 @@ namespace xcore
     typedef u64 msg_id_t;
     typedef u64 actor_id_t;
 
+    class alloc_t;
     class xmessage;
     class xmessages;
     class xactor;
     class xwork;
     class xworker;
+
+    class xworker_thread
+    {
+    public:
+        virtual bool quit() const = 0;
+    };
+
+    class xisemaphore
+    {
+    public:
+        virtual void setup(s32 initial, s32 maximum) = 0;
+        virtual void teardown()                      = 0;
+
+        virtual void request() = 0;
+        virtual void release() = 0;
+    };
+    
+    class ximutex
+    {
+    public:
+        virtual void setup()    = 0;
+        virtual void teardown() = 0;
+
+        virtual void lock()   = 0;
+        virtual void unlock() = 0;
+    };
 
     // For messages we can have one allocator per actor for sending messages.
     // This makes the actor be able to control/limit the messages that it
@@ -70,11 +97,23 @@ namespace xcore
         virtual void returned(xmessage*& msg) = 0;
     };
 
+    class xwork
+    {
+    public:
+        virtual void add(xactor* sender, xmessage* msg, xactor* recipient) = 0;
+
+        virtual void queue(xactor* actor)                                                                = 0;
+        virtual void take(xworker* worker, xactor*& actor, xmessage*& msg, u32& idx_begin, u32& idx_end) = 0;
+        virtual void done(xworker* worker, xactor*& actor, xmessage*& msg, u32& idx_begin, u32& idx_end) = 0;
+    };
+
     class xworker
     {
     public:
         struct ctxt_t
         {
+            inline ctxt_t() : m_i(0), m_e(0), m_actor(nullptr), m_msg(nullptr) {}
+
             u32       m_i;
             u32       m_e;
             xactor*   m_actor;
@@ -83,6 +122,9 @@ namespace xcore
         virtual void tick(xworker_thread* thread, xwork* work, ctxt_t* ctx) = 0;
         virtual void run(xworker_thread* thread, xwork* work)               = 0;
     };
+
+    xworker* create_worker(alloc_t* allocator);
+    void     destroy_worker(alloc_t* allocator, xworker* worker);
 
     class xsystem
     {

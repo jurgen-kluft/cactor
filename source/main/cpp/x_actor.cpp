@@ -19,25 +19,6 @@
 
 namespace xcore
 {
-    class xisemaphore
-    {
-    public:
-        virtual void setup(s32 initial, s32 maximum) = 0;
-        virtual void teardown()                      = 0;
-
-        virtual void request() = 0;
-        virtual void release() = 0;
-    };
-    class ximutex
-    {
-    public:
-        virtual void setup()    = 0;
-        virtual void teardown() = 0;
-
-        virtual void lock()   = 0;
-        virtual void unlock() = 0;
-    };
-
 #ifdef TARGET_PC
     class xsemaphore : public xisemaphore
     {
@@ -127,12 +108,6 @@ namespace xcore
         XCORE_CLASS_PLACEMENT_NEW_DELETE
     };
 #endif
-
-    class xworker_thread
-    {
-    public:
-        virtual bool quit() const = 0;
-    };
 
     // We base the receiving of messages on simple structs, messages are
     // always send back to the sender for garbage collection to simplify
@@ -278,16 +253,6 @@ namespace xcore
         XCORE_CLASS_PLACEMENT_NEW_DELETE
     };
 
-    class xwork
-    {
-    public:
-        virtual void add(xactor* sender, xmessage* msg, xactor* recipient) = 0;
-
-        virtual void queue(xactor* actor)                                                                = 0;
-        virtual void take(xworker* worker, xactor*& actor, xmessage*& msg, u32& idx_begin, u32& idx_end) = 0;
-        virtual void done(xworker* worker, xactor*& actor, xmessage*& msg, u32& idx_begin, u32& idx_end) = 0;
-    };
-
     class xactor_mailbox : public xmailbox
     {
     public:
@@ -353,8 +318,8 @@ namespace xcore
         void push(xactor* actor)
         {
             m_lock.lock();
-            s32 cw                    = m_write;
-            s32 nw                    = (cw + 1);
+            s32 const cw              = m_write;
+            s32 const nw              = (cw + 1);
             m_work[cw & (m_size - 1)] = actor;
             m_write                   = nw;
             m_lock.unlock();
@@ -384,7 +349,7 @@ namespace xcore
 
         void init(alloc_t* allocator, s32 max_num_actors = 8) { m_queue.setup(allocator, max_num_actors); }
 
-        // @Note: This can be called from multiple threads!
+        // @Note: Multiple Producers
         void add(xactor* sender, xmessage* msg, xactor* recipient)
         {
             xactor_mailbox* mb = static_cast<xactor_mailbox*>(recipient->getmailbox());
@@ -396,6 +361,7 @@ namespace xcore
             }
         }
 
+        // @Note: Single Consumer
         void take(xworker_thread* thread, xactor*& actor, xmessage*& msg, u32& msgidx, u32& msgend)
         {
             if (actor == NULL)
@@ -416,6 +382,7 @@ namespace xcore
             }
         }
 
+        // @Note: Single Consumer
         void done(xworker_thread* thread, xactor*& actor, xmessage*& msg, u32& msgidx, u32& msgend)
         {
             // If 'msgidx == msgend' then try and add the actor back to the work-queue since
@@ -426,7 +393,7 @@ namespace xcore
                 if (mb->release(msgidx, msgend) == 1)
                 {
                     // mailbox indicated that we have to push back the actor in the work-queue
-                    // because there are new messages pending.
+                    // because there are still messages pending.
                     m_queue.push(actor);
                 }
                 actor = NULL;
@@ -441,6 +408,7 @@ namespace xcore
         void tick(xworker_thread* thread, xwork* work, ctxt_t* ctx)
         {
             // Try and take an [actor, message[i,e]] piece of work
+            // If no work is available it will block on the semaphore.
             work->take(this, ctx->m_actor, ctx->m_msg, ctx->m_i, ctx->m_e);
 
             // Let the actor handle the message
@@ -470,16 +438,26 @@ namespace xcore
         void run(xworker_thread* thread, xwork* work)
         {
             ctxt_t ctx;
-            ctx.m_i = 0;
-            ctx.m_e = 0;
-            ctx.m_actor = nullptr;
-            ctx.m_msg   = nullptr;
-
             while (thread->quit() == false)
             {
                 tick(thread, work, &ctx);
             }
         }
+
+        XCORE_CLASS_PLACEMENT_NEW_DELETE
     };
+
+
+
+
+    xworker* create_worker(alloc_t* allocator)
+    {
+        return allocator->construct<xworker_imp>();
+    }
+
+    void     destroy_worker(alloc_t* allocator, xworker* worker)
+    {
+        allocator->destruct(worker);
+    }
 
 } // namespace xcore
