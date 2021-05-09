@@ -102,7 +102,6 @@ namespace xcore
     public:
         virtual void add(xactor* sender, xmessage* msg, xactor* recipient) = 0;
 
-        virtual void queue(xactor* actor)                                                                = 0;
         virtual void take(xworker* worker, xactor*& actor, xmessage*& msg, u32& idx_begin, u32& idx_end) = 0;
         virtual void done(xworker* worker, xactor*& actor, xmessage*& msg, u32& idx_begin, u32& idx_end) = 0;
     };
