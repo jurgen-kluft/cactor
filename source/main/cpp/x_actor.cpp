@@ -298,8 +298,8 @@ namespace xcore
             void init(alloc_t* allocator, s32 max_actors)
             {
                 // No need for 'size' parameter, should just be next-power-of-2 of 'max actors'
-                m_size        = math_t::next_power_of_two(max_actors);
-                m_work_actors = (actor_handle_t**)allocator->allocate(sizeof(void*) * size);
+                m_size        = math::next_power_of_two(max_actors);
+                m_work_actors = (actor_handle_t**)allocator->allocate(sizeof(void*) * m_size);
                 m_sema.init(0, max_actors);
                 m_lock.init();
             }
@@ -338,7 +338,7 @@ namespace xcore
         };
 
         // Work queue init and deinit
-        void work_init(work_queue_t* queue, alloc_t* allocator, u32 queue_size, s32 max_num_actors = 8) { queue->init(allocator, queue_size, max_num_actors); }
+        void work_init(work_queue_t* queue, alloc_t* allocator, s32 max_num_actors = 8) { queue->init(allocator, max_num_actors); }
         void work_deinit(work_queue_t* queue, alloc_t* allocator) { queue->deinit(allocator); }
 
         // @Note: Multiple Producers
@@ -415,10 +415,10 @@ namespace xcore
             s32  release(u32 idx, u32 end); // return 1 when there are messages pending
         };
 
-        s32  mailbox_t::push(message_t* msg) { return (m_messages->push(msg)); }
-        void mailbox_t::claim(u32& idx, u32& end) { m_messages->claim(idx, end); }
-        void mailbox_t::deque(u32& idx, u32 end, message_t*& msg) { m_messages->deque(idx, end, msg); }
-        s32  mailbox_t::release(u32 idx, u32 end) { return (m_messages->release(idx, end)); }
+        s32  mailbox_t::push(message_t* msg) { return (m_messages.push(msg)); }
+        void mailbox_t::claim(u32& idx, u32& end) { m_messages.claim(idx, end); }
+        void mailbox_t::deque(u32& idx, u32 end, message_t*& msg) { m_messages.deque(idx, end, msg); }
+        s32  mailbox_t::release(u32 idx, u32 end) { return (m_messages.release(idx, end)); }
 
         struct ctxt_t
         {
@@ -438,7 +438,7 @@ namespace xcore
             message_t*      m_msg;
         };
 
-        void worker_tick(worker_thread_t* thread, work_queue_t* work, ctxt_t* ctx)
+        void worker_tick(work_queue_t* work, ctxt_t* ctx)
         {
             // Try and take an [actor, message[i,e]] piece of work
             // If no work is available it will block on the semaphore.
@@ -474,7 +474,7 @@ namespace xcore
             ctxt_t ctx;
             while (thread->quit() == false)
             {
-                worker_tick(thread, work, &ctx);
+                worker_tick(work, &ctx);
             }
         }
 
@@ -499,7 +499,7 @@ namespace xcore
 
         void actormodel_t::start(s32 num_threads, s32 max_actors) 
         {
-            m_num_threads = num_threads;
+			m_numthreads = num_threads;
             m_work_queue.init(m_allocator, max_actors);
 
             m_actors = (actor_handle_t*)m_allocator->allocate(sizeof(actor_handle_t) * max_actors);
@@ -514,7 +514,7 @@ namespace xcore
         {
             // where is the mailbox of 'sender' and 'recipient'?
 
-            work_add(system->m_work_queue, sender, msg, recipient);
+            work_add(&system->m_work_queue, sender, msg, recipient);
         }
 
     } // namespace actormodel
