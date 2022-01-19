@@ -1,5 +1,6 @@
 #include "xbase/x_allocator.h"
 #include "xbase/x_hash.h"
+#include "xbase/x_math.h"
 #include "xactor/x_actor.h"
 
 #ifdef TARGET_PC
@@ -13,11 +14,6 @@
 #include <condition_variable>
 #endif
 
-// Actor Model:
-// - An actor is executed on one thread only
-// - Order of execution of messages is undetermined
-//
-
 namespace xcore
 {
     namespace actormodel
@@ -30,13 +26,21 @@ namespace xcore
             return calchash((const xbyte*)str, (u32)(i - str));
         }
 
+        class worker_thread_t
+        {
+        public:
+            bool quit() const;
+        };
+
+
+
 #ifdef TARGET_PC
-        class semaphore_t : public isemaphore_t
+        class semaphore_t
         {
             HANDLE ghSemaphore;
 
         public:
-            virtual void setup(s32 initial, s32 maximum)
+            void init(s32 initial, s32 maximum)
             {
                 ghSemaphore = ::CreateSemaphore(NULL,    // default security attributes
                                                 initial, // initial count
@@ -44,8 +48,8 @@ namespace xcore
                                                 NULL);   // unnamed semaphore
             }
 
-            virtual void teardown() { CloseHandle(ghSemaphore); }
-            virtual void request()
+            void deinit() { CloseHandle(ghSemaphore); }
+            void request()
             {
                 DWORD dwWaitResult = WaitForSingleObject(ghSemaphore, INFINITE);
                 switch (dwWaitResult)
@@ -54,43 +58,43 @@ namespace xcore
                     case WAIT_FAILED: break;
                 }
             }
-            virtual void release() { ::ReleaseSemaphore(ghSemaphore /*handle to semaphore*/, 1 /*increase count by one*/, NULL); }
+            void release() { ::ReleaseSemaphore(ghSemaphore /*handle to semaphore*/, 1 /*increase count by one*/, NULL); }
 
             XCORE_CLASS_PLACEMENT_NEW_DELETE
         };
 
-        class mutex_t : public imutex_t
+        class mutex_t
         {
             CRITICAL_SECTION ghMutex;
 
         public:
-            virtual void setup() { InitializeCriticalSectionAndSpinCount((CRITICAL_SECTION*)&ghMutex, 4000); }
-            virtual void teardown() { DeleteCriticalSection((CRITICAL_SECTION*)&ghMutex); }
-            virtual void lock() { EnterCriticalSection((CRITICAL_SECTION*)&ghMutex); }
-            virtual void unlock() { LeaveCriticalSection((CRITICAL_SECTION*)&ghMutex); }
+            void init() { InitializeCriticalSectionAndSpinCount((CRITICAL_SECTION*)&ghMutex, 4000); }
+            void deinit() { DeleteCriticalSection((CRITICAL_SECTION*)&ghMutex); }
+            void lock() { EnterCriticalSection((CRITICAL_SECTION*)&ghMutex); }
+            void unlock() { LeaveCriticalSection((CRITICAL_SECTION*)&ghMutex); }
 
             XCORE_CLASS_PLACEMENT_NEW_DELETE
         };
 #elif defined(TARGET_MAC)
-        class semaphore_t : public isemaphore_t
+        class semaphore_t
         {
             size_t                  avail;
             std::mutex              m;
             std::condition_variable cv;
 
         public:
-            virtual void setup(s32 initial, s32 maximum) { avail = maximum; }
+            void init(s32 initial, s32 maximum) { avail = maximum; }
 
-            virtual void teardown() {}
+            void deinit() {}
 
-            virtual void request()
+            void request()
             {
                 std::unique_lock<std::mutex> lk(m);
                 cv.wait(lk, [this] { return avail > 0; });
                 avail--;
             }
 
-            virtual void release()
+            void release()
             {
                 std::lock_guard<std::mutex> lk(m);
                 avail++;
@@ -100,15 +104,15 @@ namespace xcore
             XCORE_CLASS_PLACEMENT_NEW_DELETE
         };
 
-        class mutex_t : public imutex_t
+        class mutex_t
         {
             pthread_mutex_t ghMutex;
 
         public:
-            virtual void setup() { pthread_mutex_init(&ghMutex, 0); }
-            virtual void teardown() { pthread_mutex_destroy(&ghMutex); }
-            virtual void lock() { pthread_mutex_lock(&ghMutex); }
-            virtual void unlock() { pthread_mutex_unlock(&ghMutex); }
+            void init() { pthread_mutex_init(&ghMutex, 0); }
+            void deinit() { pthread_mutex_destroy(&ghMutex); }
+            void lock() { pthread_mutex_lock(&ghMutex); }
+            void unlock() { pthread_mutex_unlock(&ghMutex); }
 
             XCORE_CLASS_PLACEMENT_NEW_DELETE
         };
@@ -123,7 +127,7 @@ namespace xcore
         // many physical and logical cores this machine has as well as how many
         // hardware threads.
 
-        // C 1 | R 15 | W 15
+        // R 16 | W 16
 
         const u32 WRITE_INDEX_SHIFT = 0;
         const u32 WRITE_INDEX_BITS  = 12;
@@ -132,8 +136,6 @@ namespace xcore
         const u32 READ_INDEX_BITS   = 12;
         const u32 READ_INDEX_MASK   = ((u32(1) << READ_INDEX_BITS) - 1) << READ_INDEX_SHIFT;
         const u32 MAX_MESSAGES      = (u32(1) << WRITE_INDEX_BITS);
-        // const u32 QUEUED_FLAG_SHIFT = 31;
-        // const u32 QUEUED_FLAG = u32(1) << QUEUED_FLAG_SHIFT;
 
         // Queue using a ringbuffer, it is important that this queue
         // is initialized with a size that will never be reached. This queue
@@ -160,13 +162,13 @@ namespace xcore
             void init(alloc_t* allocator)
             {
                 m_queue = (void**)allocator->allocate(m_size * sizeof(void*), sizeof(void*));
-                m_lock.setup();
+                m_lock.init();
             }
 
-            void destroy(alloc_t* allocator)
+            void deinit(alloc_t* allocator)
             {
                 allocator->deallocate(m_queue);
-                m_lock.teardown();
+                m_lock.deinit();
             }
 
             inline u32 size() const { return m_size; }
@@ -191,6 +193,7 @@ namespace xcore
                 return (ri == wi) ? 1 : 0;
             }
 
+            // Single 'consumer'
             void claim(u32& idx, u32& end)
             {
                 m_lock.lock();
@@ -200,15 +203,16 @@ namespace xcore
                 end = u32((i & WRITE_INDEX_MASK) >> WRITE_INDEX_SHIFT);
             }
 
+            // Single 'consumer'
             void deque(u32& idx, u32 end, void*& p)
             {
                 p = m_queue[idx & (m_size - 1)];
                 idx++;
             }
 
+            // Single 'consumer'
             s32 release(u32 idx, u32 end)
             {
-                // There is only one 'consumer'
                 // This is our new 'read' index
                 u32 const r = end & (m_size - 1);
                 m_lock.lock();
@@ -226,7 +230,7 @@ namespace xcore
             }
         };
 
-        class message_queue_t : public messages_t
+        class message_queue_t
         {
             queue_t m_queue;
 
@@ -237,240 +241,282 @@ namespace xcore
             }
 
             void init(alloc_t* allocator) { m_queue.init(allocator); }
+            void deinit(alloc_t* allocator) { m_queue.deinit(allocator); }
 
-            virtual s32 push(message_t* msg)
+            s32 push(message_t* msg)
             {
                 void* p = (void*)msg;
                 return m_queue.push(p);
             }
 
-            virtual void claim(u32& idx, u32& end) { m_queue.claim(idx, end); }
+            void claim(u32& idx, u32& end) { m_queue.claim(idx, end); }
 
-            virtual void deque(u32& idx, u32 end, message_t*& msg)
+            void deque(u32& idx, u32 end, message_t*& msg)
             {
                 void* p;
                 m_queue.deque(idx, end, p);
                 msg = (message_t*)p;
             }
 
-            virtual s32 release(u32 idx, u32 end) { return m_queue.release(idx, end); }
+            s32 release(u32 idx, u32 end) { return m_queue.release(idx, end); }
 
             XCORE_CLASS_PLACEMENT_NEW_DELETE
         };
 
-        class actor_mailbox_t : public mailbox_t
+        struct actor_handle_t
         {
-        public:
-            actor_t*    m_actor;
-            work_t*     m_work;
-            messages_t* m_messages;
-
-            void setup(actor_t* actor, work_t* work, alloc_t* allocator, s32 max_messages)
-            {
-                m_actor    = actor;
-                m_work     = work;
-                m_messages = allocator->construct<message_queue_t>(max_messages);
-            }
-
-            void teardown() {}
-
-            virtual void send(message_t* msg, actor_t* recipient) { m_work->add(m_actor, msg, recipient); }
-
-            s32  push(message_t* msg);
-            void claim(u32& idx, u32& end); // return [i,end] range of messages
-            void deque(u32& idx, u32 end, message_t*& msg);
-            s32  release(u32 idx, u32 end); // return 1 when there are messages pending
+            actor_t*   m_actor;
+            mailbox_t* m_mailbox;
         };
 
-        s32  actor_mailbox_t::push(message_t* msg) { return (m_messages->push(msg)); }
-        void actor_mailbox_t::claim(u32& idx, u32& end) { m_messages->claim(idx, end); }
-        void actor_mailbox_t::deque(u32& idx, u32 end, message_t*& msg) { m_messages->deque(idx, end, msg); }
-        s32  actor_mailbox_t::release(u32 idx, u32 end) { return (m_messages->release(idx, end)); }
+        void init(actor_handle_t* a)
+        {
+            a->m_actor = nullptr;
+            a->m_mailbox = nullptr;
+        }
 
         class work_queue_t
         {
-            s32         m_read;
-            s32         m_write;
-            mutex_t     m_lock;
-            actor_t**   m_work;
-            semaphore_t m_sema;
-            u32         m_size;
+            s32              m_read;
+            s32              m_write;
+            mutex_t          m_lock;
+            actor_handle_t** m_work_actors;
+            semaphore_t      m_sema;
+            u32              m_size;
 
         public:
             inline work_queue_t()
                 : m_read(0)
                 , m_write(0)
                 , m_lock()
-                , m_work(nullptr)
+                , m_work_actors(nullptr)
                 , m_size(0)
                 , m_sema()
             {
             }
 
-            void setup(alloc_t* allocator, u32 size, s32 max_actors)
+            void init(alloc_t* allocator, s32 max_actors)
             {
-                m_size = size;
-                m_work = (actor_t**)allocator->allocate(sizeof(void*) * size);
-                m_sema.setup(0, max_actors);
-                m_lock.setup();
+                // No need for 'size' parameter, should just be next-power-of-2 of 'max actors'
+                m_size        = math_t::next_power_of_two(max_actors);
+                m_work_actors = (actor_handle_t**)allocator->allocate(sizeof(void*) * size);
+                m_sema.init(0, max_actors);
+                m_lock.init();
             }
 
-            void teardown(alloc_t* allocator)
+            void deinit(alloc_t* allocator)
             {
                 m_read  = 0;
                 m_write = 0;
-                m_lock.teardown();
-                allocator->deallocate(m_work);
-                m_work = nullptr;
-                m_size = 0;
-                m_sema.teardown();
+                m_lock.deinit();
+                allocator->deallocate(m_work_actors);
+                m_work_actors = nullptr;
+                m_size        = 0;
+                m_sema.deinit();
             }
 
-            void push(actor_t* actor)
+            void push(actor_handle_t* actor)
             {
                 m_lock.lock();
-                s32 const cw              = m_write;
-                s32 const nw              = (cw + 1);
-                m_work[cw & (m_size - 1)] = actor;
-                m_write                   = nw;
+                s32 const cw                     = m_write;
+                s32 const nw                     = (cw + 1);
+                m_work_actors[cw & (m_size - 1)] = actor;
+                m_write                          = nw;
                 m_lock.unlock();
                 m_sema.release();
             }
 
-            void pop(actor_t*& actor)
+            void pop(actor_handle_t*& actor)
             {
                 m_sema.request();
                 m_lock.lock();
                 s32 const ri = m_read;
                 m_read += 1;
-                actor = m_work[ri & (m_size - 1)];
+                actor = m_work_actors[ri & (m_size - 1)];
                 m_lock.unlock();
             }
         };
 
-        class work_imp_t : public work_t
+        // Work queue init and deinit
+        void work_init(work_queue_t* queue, alloc_t* allocator, u32 queue_size, s32 max_num_actors = 8) { queue->init(allocator, queue_size, max_num_actors); }
+        void work_deinit(work_queue_t* queue, alloc_t* allocator) { queue->deinit(allocator); }
+
+        // @Note: Multiple Producers
+        void work_add(work_queue_t* queue, actor_handle_t* sender, message_t* msg, actor_handle_t* recipient)
         {
-            work_queue_t m_queue;
-
-        public:
-            inline work_imp_t()
-                : m_queue()
+            if (sender->m_mailbox->push(msg) == 1)
             {
+                // mailbox indicated that we have pushed a message and the actor is already
+                // marked as 'idle' and we are the one here to push him in the work-queue.
+                queue->push(recipient);
             }
+        }
 
-            void setup(alloc_t* allocator, u32 queue_size, s32 max_num_actors = 8) { m_queue.setup(allocator, queue_size, max_num_actors); }
-
-            void teardown(alloc_t* allocator) { m_queue.teardown(allocator); }
-
-            // @Note: Multiple Producers
-            void add(actor_t* sender, message_t* msg, actor_t* recipient)
+        // @Note: Multiple Consumers
+        void work_take(work_queue_t* queue, actor_handle_t*& actor, message_t*& msg, u32& msgidx, u32& msgend)
+        {
+            if (actor == NULL)
             {
-                actor_mailbox_t* mb = static_cast<actor_mailbox_t*>(recipient->getmailbox());
-                if (mb->push(msg) == 1)
+                // This will make the calling thread block if the queue is empty
+                queue->pop(actor);
+
+                // Claim a batch of messages to be processed here by this worker
+                actor->m_mailbox->claim(msgidx, msgend);
+                actor->m_mailbox->deque(msgidx, msgend, msg);
+            }
+            else
+            {
+                // Take the next message out of the batch from the mailbox of the actor
+                actor->m_mailbox->deque(msgidx, msgend, msg);
+            }
+        }
+
+        // @Note: Multiple Consumers
+        void work_done(work_queue_t* queue, actor_handle_t*& actor, message_t*& msg, u32& msgidx, u32& msgend)
+        {
+            // If 'msgidx == msgend' then try and add the actor back to the work-queue since
+            // it was the last message we supposed to have processed from the batch.
+            if (msgidx == msgend)
+            {
+                if (actor->m_mailbox->release(msgidx, msgend) == 1)
                 {
-                    // mailbox indicated that we have pushed a message and the actor is already
-                    // marked as 'idle' and we are the one here to push him in the work-queue.
-                    m_queue.push(recipient);
+                    // mailbox indicated that we have to push back the actor in the work-queue
+                    // because there are still messages pending.
+                    queue->push(actor);
                 }
+                actor = NULL;
+            }
+            msg = NULL;
+        }
+
+        class mailbox_t
+        {
+        public:
+            actor_handle_t*  m_actor;
+            work_queue_t*    m_work;
+            message_queue_t  m_messages;
+
+            void init(actor_handle_t* actor, work_queue_t* work, alloc_t* allocator, s32 max_messages)
+            {
+                m_actor    = actor;
+                m_work     = work;
+                m_messages.init(allocator);
             }
 
-            // @Note: Single Consumer
-            void take(worker_t* worker, actor_t*& actor, message_t*& msg, u32& msgidx, u32& msgend)
+            void deinit(alloc_t* allocator)
             {
-                if (actor == NULL)
-                {
-                    // This will make the calling thread block if the queue is empty
-                    m_queue.pop(actor);
+                m_messages.deinit(allocator);
+            }
 
-                    actor_mailbox_t* mb = static_cast<actor_mailbox_t*>(actor->getmailbox());
-                    // Claim a batch of messages to be processed here by this worker
-                    mb->claim(msgidx, msgend);
-                    mb->deque(msgidx, msgend, msg);
+            void send(message_t* msg, actor_handle_t* recipient) { work_add(m_work, m_actor, msg, recipient); }
+            s32  push(message_t* msg);
+            void claim(u32& idx, u32& end); // return [i,end] range of messages
+            void deque(u32& idx, u32 end, message_t*& msg);
+            s32  release(u32 idx, u32 end); // return 1 when there are messages pending
+        };
+
+        s32  mailbox_t::push(message_t* msg) { return (m_messages->push(msg)); }
+        void mailbox_t::claim(u32& idx, u32& end) { m_messages->claim(idx, end); }
+        void mailbox_t::deque(u32& idx, u32 end, message_t*& msg) { m_messages->deque(idx, end, msg); }
+        s32  mailbox_t::release(u32 idx, u32 end) { return (m_messages->release(idx, end)); }
+
+        struct ctxt_t
+        {
+            inline ctxt_t()
+                : m_i(0)
+                , m_e(0)
+                , m_actor(nullptr)
+                , m_mailbox(nullptr)
+                , m_msg(nullptr)
+            {
+            }
+
+            u32             m_i;
+            u32             m_e;
+            actor_handle_t* m_actor;
+            mailbox_t*      m_mailbox;
+            message_t*      m_msg;
+        };
+
+        void worker_tick(worker_thread_t* thread, work_queue_t* work, ctxt_t* ctx)
+        {
+            // Try and take an [actor, message[i,e]] piece of work
+            // If no work is available it will block on the semaphore.
+            work_take(work, ctx->m_actor, ctx->m_msg, ctx->m_i, ctx->m_e);
+
+            // Let the actor handle the message
+            if (ctx->m_msg->is_recipient(ctx->m_actor))
+            {
+                ctx->m_actor->m_actor->received(ctx->m_msg);
+                if (ctx->m_msg->is_sender(ctx->m_actor))
+                {
+                    // Garbage collect the message immediately
+                    ctx->m_actor->m_actor->returned(ctx->m_msg);
                 }
                 else
                 {
-                    // Take the next message out of the batch from the mailbox of the actor
-                    actor_mailbox_t* mb = static_cast<actor_mailbox_t*>(actor->getmailbox());
-                    mb->deque(msgidx, msgend, msg);
+                    // Send this message back to sender, where is the mailbox of the sender?
+                    work_add(work, ctx->m_actor, ctx->m_msg, ctx->m_msg->get_sender());
                 }
             }
-
-            // @Note: Single Consumer
-            void done(worker_t* worker, actor_t*& actor, message_t*& msg, u32& msgidx, u32& msgend)
+            else if (ctx->m_msg->is_sender(ctx->m_actor))
             {
-                // If 'msgidx == msgend' then try and add the actor back to the work-queue since
-                // it was the last message we supposed to have processed from the batch.
-                if (msgidx == msgend)
-                {
-                    actor_mailbox_t* mb = static_cast<actor_mailbox_t*>(actor->getmailbox());
-                    if (mb->release(msgidx, msgend) == 1)
-                    {
-                        // mailbox indicated that we have to push back the actor in the work-queue
-                        // because there are still messages pending.
-                        m_queue.push(actor);
-                    }
-                    actor = NULL;
-                }
-                msg = NULL;
+                ctx->m_actor->m_actor->returned(ctx->m_msg);
             }
-        };
 
-        class worker_imp_t : public worker_t
+            // Report the [actor, message[i,e]] back as 'done'
+            work_done(work, ctx->m_actor, ctx->m_msg, ctx->m_i, ctx->m_e);
+        }
+
+        // a single work_queue_t is shared between multiple worker_thread_t
+        void worker_run(worker_thread_t* thread, work_queue_t* work)
+        {
+            ctxt_t ctx;
+            while (thread->quit() == false)
+            {
+                worker_tick(thread, work, &ctx);
+            }
+        }
+
+        class actormodel_t
         {
         public:
-            void tick(worker_thread_t* thread, work_t* work, ctxt_t* ctx)
-            {
-                // Try and take an [actor, message[i,e]] piece of work
-                // If no work is available it will block on the semaphore.
-                work->take(this, ctx->m_actor, ctx->m_msg, ctx->m_i, ctx->m_e);
+            void start(s32 num_threads, s32 max_actors);
+            void stop();
 
-                // Let the actor handle the message
-                if (ctx->m_msg->is_recipient(ctx->m_actor))
-                {
-                    ctx->m_actor->received(ctx->m_msg);
-                    if (ctx->m_msg->is_sender(ctx->m_actor))
-                    {
-                        // Garbage collect the message immediately
-                        ctx->m_actor->returned(ctx->m_msg);
-                    }
-                    else
-                    {
-                        // Send this message back to sender
-                        work->add(ctx->m_actor, ctx->m_msg, ctx->m_msg->get_sender());
-                    }
-                }
-                else if (ctx->m_msg->is_sender(ctx->m_actor))
-                {
-                    ctx->m_actor->returned(ctx->m_msg);
-                }
+            actor_handle_t* join(actor_t* actor);
+            void            leave(actor_handle_t* actor);
 
-                // Report the [actor, message[i,e]] back as 'done'
-                work->done(this, ctx->m_actor, ctx->m_msg, ctx->m_i, ctx->m_e);
-            }
-
-            void run(worker_thread_t* thread, work_t* work)
-            {
-                ctxt_t ctx;
-                while (thread->quit() == false)
-                {
-                    tick(thread, work, &ctx);
-                }
-            }
-
-            XCORE_CLASS_PLACEMENT_NEW_DELETE
-        };
-
-        worker_t* create_worker(alloc_t* allocator) { return allocator->construct<worker_imp_t>(); }
-
-        void destroy_worker(alloc_t* allocator, worker_t* worker) { allocator->destruct(worker); }
-
-        class actormodel_imp_t : public actormodel_t
-        {
-            u32              m_numthreads;
-            work_imp_t       m_work;
-            worker_imp_t     m_worker;
+            alloc_t*         m_allocator;
+            s32              m_numthreads;
+            work_queue_t     m_work_queue;
             worker_thread_t* m_thread_workers;
+            
+            s32              m_num_actors;
+            s32              m_max_actors;
+            actor_handle_t*  m_actors;
         };
+
+        void actormodel_t::start(s32 num_threads, s32 max_actors) 
+        {
+            m_num_threads = num_threads;
+            m_work_queue.init(m_allocator, max_actors);
+
+            m_actors = (actor_handle_t*)m_allocator->allocate(sizeof(actor_handle_t) * max_actors);
+            for (s32 i=0; i<max_actors; ++i)
+                init(&m_actors[i]);
+
+        }
+
+        void actormodel_t::stop() {}
+
+        void send(actormodel_t* system, actor_handle_t* sender, message_t* msg, actor_handle_t* recipient)
+        {
+            // where is the mailbox of 'sender' and 'recipient'?
+
+            work_add(system->m_work_queue, sender, msg, recipient);
+        }
+
     } // namespace actormodel
 
 } // namespace xcore
