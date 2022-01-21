@@ -18,8 +18,6 @@ namespace xcore
         class worker_t;
         typedef u64 id_t;
 
-
-
         // For messages we can have one allocator per actor for sending messages.
         // This makes the actor be able to control/limit the messages that it
         // creates and sends.
@@ -33,22 +31,22 @@ namespace xcore
         id_t get_msgid(const char*);
 
         class actormodel_t;
-        struct actor_handle_t;
+        struct actor_t;
 
         class message_t
         {
         public:
-            bool            is_sender(actor_handle_t* s) const { return m_sender == s; }
-            bool            is_recipient(actor_handle_t* r) const { return m_sender != r; }
-            actor_handle_t* get_sender() const { return m_sender; }
-            bool            has_id(id_t _id) const { return m_id == _id; }
+            bool     is_sender(actor_t* s) const { return m_sender == s; }
+            bool     is_recipient(actor_t* r) const { return m_sender != r; }
+            actor_t* get_sender() const { return m_sender; }
+            bool     has_id(id_t _id) const { return m_id == _id; }
 
         protected:
-            id_t            m_id;
-            actor_handle_t* m_sender;
+            id_t     m_id;
+            actor_t* m_sender;
         };
 
-        class actor_t
+        class handler_t
         {
         public:
             virtual void received(message_t* msg)  = 0;
@@ -58,9 +56,9 @@ namespace xcore
         actormodel_t* create_system(alloc_t* allocator, s32 num_threads, s32 max_actors);
         void          destroy_system(alloc_t* allocator, actormodel_t* system);
 
-        actor_handle_t* actor_join(actormodel_t* system);
-        void            actor_leave(actormodel_t* system, actor_handle_t* actor);
-        void            actor_send(actormodel_t* system, actor_handle_t* sender, message_t* msg, actor_handle_t* recipient);
+        actor_t* actor_join(actormodel_t* system, handler_t* handler);
+        void     actor_leave(actormodel_t* system, actor_t* actor);
+        void     actor_send(actormodel_t* system, actor_t* sender, message_t* msg, actor_t* recipient);
 
     } // namespace actormodel
 

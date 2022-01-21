@@ -32,8 +32,6 @@ namespace xcore
             bool quit() const;
         };
 
-
-
 #ifdef TARGET_PC
         class semaphore_t
         {
@@ -263,26 +261,28 @@ namespace xcore
             XCORE_CLASS_PLACEMENT_NEW_DELETE
         };
 
-        struct actor_handle_t
+        class mailbox_t;
+
+        struct actor_t
         {
-            actor_t*   m_actor;
+            handler_t* m_actor;
             mailbox_t* m_mailbox;
         };
 
-        void init(actor_handle_t* a)
+        void init(actor_t* a)
         {
-            a->m_actor = nullptr;
+            a->m_actor   = nullptr;
             a->m_mailbox = nullptr;
         }
 
         class work_queue_t
         {
-            s32              m_read;
-            s32              m_write;
-            mutex_t          m_lock;
-            actor_handle_t** m_work_actors;
-            semaphore_t      m_sema;
-            u32              m_size;
+            s32         m_read;
+            s32         m_write;
+            mutex_t     m_lock;
+            actor_t**   m_work_actors;
+            semaphore_t m_sema;
+            u32         m_size;
 
         public:
             inline work_queue_t()
@@ -299,7 +299,7 @@ namespace xcore
             {
                 // No need for 'size' parameter, should just be next-power-of-2 of 'max actors'
                 m_size        = math::next_power_of_two(max_actors);
-                m_work_actors = (actor_handle_t**)allocator->allocate(sizeof(void*) * m_size);
+                m_work_actors = (actor_t**)allocator->allocate(sizeof(void*) * m_size);
                 m_sema.init(0, max_actors);
                 m_lock.init();
             }
@@ -315,7 +315,7 @@ namespace xcore
                 m_sema.deinit();
             }
 
-            void push(actor_handle_t* actor)
+            void push(actor_t* actor)
             {
                 m_lock.lock();
                 s32 const cw                     = m_write;
@@ -326,7 +326,7 @@ namespace xcore
                 m_sema.release();
             }
 
-            void pop(actor_handle_t*& actor)
+            void pop(actor_t*& actor)
             {
                 m_sema.request();
                 m_lock.lock();
@@ -337,12 +337,35 @@ namespace xcore
             }
         };
 
+        class mailbox_t
+        {
+        public:
+            actor_t*        m_actor;
+            work_queue_t*   m_work;
+            message_queue_t m_messages;
+
+            void init(actor_t* actor, work_queue_t* work, alloc_t* allocator, s32 max_messages)
+            {
+                m_actor = actor;
+                m_work  = work;
+                m_messages.init(allocator);
+            }
+
+            void deinit(alloc_t* allocator) { m_messages.deinit(allocator); }
+
+            void send(message_t* msg, actor_t* recipient);
+            s32  push(message_t* msg);
+            void claim(u32& idx, u32& end); // return [i,end] range of messages
+            void deque(u32& idx, u32 end, message_t*& msg);
+            s32  release(u32 idx, u32 end); // return 1 when there are messages pending
+        };
+
         // Work queue init and deinit
         void work_init(work_queue_t* queue, alloc_t* allocator, s32 max_num_actors = 8) { queue->init(allocator, max_num_actors); }
         void work_deinit(work_queue_t* queue, alloc_t* allocator) { queue->deinit(allocator); }
 
         // @Note: Multiple Producers
-        void work_add(work_queue_t* queue, actor_handle_t* sender, message_t* msg, actor_handle_t* recipient)
+        void work_add(work_queue_t* queue, actor_t* sender, message_t* msg, actor_t* recipient)
         {
             if (sender->m_mailbox->push(msg) == 1)
             {
@@ -353,7 +376,7 @@ namespace xcore
         }
 
         // @Note: Multiple Consumers
-        void work_take(work_queue_t* queue, actor_handle_t*& actor, message_t*& msg, u32& msgidx, u32& msgend)
+        void work_take(work_queue_t* queue, actor_t*& actor, message_t*& msg, u32& msgidx, u32& msgend)
         {
             if (actor == NULL)
             {
@@ -372,7 +395,7 @@ namespace xcore
         }
 
         // @Note: Multiple Consumers
-        void work_done(work_queue_t* queue, actor_handle_t*& actor, message_t*& msg, u32& msgidx, u32& msgend)
+        void work_done(work_queue_t* queue, actor_t*& actor, message_t*& msg, u32& msgidx, u32& msgend)
         {
             // If 'msgidx == msgend' then try and add the actor back to the work-queue since
             // it was the last message we supposed to have processed from the batch.
@@ -389,32 +412,7 @@ namespace xcore
             msg = NULL;
         }
 
-        class mailbox_t
-        {
-        public:
-            actor_handle_t*  m_actor;
-            work_queue_t*    m_work;
-            message_queue_t  m_messages;
-
-            void init(actor_handle_t* actor, work_queue_t* work, alloc_t* allocator, s32 max_messages)
-            {
-                m_actor    = actor;
-                m_work     = work;
-                m_messages.init(allocator);
-            }
-
-            void deinit(alloc_t* allocator)
-            {
-                m_messages.deinit(allocator);
-            }
-
-            void send(message_t* msg, actor_handle_t* recipient) { work_add(m_work, m_actor, msg, recipient); }
-            s32  push(message_t* msg);
-            void claim(u32& idx, u32& end); // return [i,end] range of messages
-            void deque(u32& idx, u32 end, message_t*& msg);
-            s32  release(u32 idx, u32 end); // return 1 when there are messages pending
-        };
-
+        void mailbox_t::send(message_t* msg, actor_t* recipient) { work_add(m_work, m_actor, msg, recipient); }
         s32  mailbox_t::push(message_t* msg) { return (m_messages.push(msg)); }
         void mailbox_t::claim(u32& idx, u32& end) { m_messages.claim(idx, end); }
         void mailbox_t::deque(u32& idx, u32 end, message_t*& msg) { m_messages.deque(idx, end, msg); }
@@ -431,11 +429,11 @@ namespace xcore
             {
             }
 
-            u32             m_i;
-            u32             m_e;
-            actor_handle_t* m_actor;
-            mailbox_t*      m_mailbox;
-            message_t*      m_msg;
+            u32        m_i;
+            u32        m_e;
+            actor_t*   m_actor;
+            mailbox_t* m_mailbox;
+            message_t* m_msg;
         };
 
         void worker_tick(work_queue_t* work, ctxt_t* ctx)
@@ -484,36 +482,36 @@ namespace xcore
             void start(s32 num_threads, s32 max_actors);
             void stop();
 
-            actor_handle_t* join(actor_t* actor);
-            void            leave(actor_handle_t* actor);
+            actor_t* join(handler_t* actor);
+            void     leave(actor_t* actor);
 
             alloc_t*         m_allocator;
             s32              m_numthreads;
             work_queue_t     m_work_queue;
             worker_thread_t* m_thread_workers;
-            
-            s32              m_num_actors;
-            s32              m_max_actors;
-            actor_handle_t*  m_actors;
+
+            s32      m_num_actors;
+            s32      m_max_actors;
+            actor_t* m_actors;
         };
 
-        void actormodel_t::start(s32 num_threads, s32 max_actors) 
+        void actormodel_t::start(s32 num_threads, s32 max_actors)
         {
-			m_numthreads = num_threads;
+            m_numthreads = num_threads;
             m_work_queue.init(m_allocator, max_actors);
 
-            m_actors = (actor_handle_t*)m_allocator->allocate(sizeof(actor_handle_t) * max_actors);
-            for (s32 i=0; i<max_actors; ++i)
+            m_actors = (actor_t*)m_allocator->allocate(sizeof(actor_t) * max_actors);
+            for (s32 i = 0; i < max_actors; ++i)
                 init(&m_actors[i]);
-
         }
 
         void actormodel_t::stop() {}
 
-        void send(actormodel_t* system, actor_handle_t* sender, message_t* msg, actor_handle_t* recipient)
-        {
-            // where is the mailbox of 'sender' and 'recipient'?
+        actor_t* actor_join(actormodel_t* system, handler_t* handler) { return system->join(handler); }
+        void     actor_leave(actormodel_t* system, actor_t* actor) { system->leave(actor); }
 
+        void send(actormodel_t* system, actor_t* sender, message_t* msg, actor_t* recipient)
+        {
             work_add(&system->m_work_queue, sender, msg, recipient);
         }
 
