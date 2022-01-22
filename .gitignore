@@ -1,11 +1,15 @@
 #ignore all files
-*.*
+*
+!*/
+
 vendor/
 t2-output/
 target/
 tags
 
 #except the following files
+!.gitignore
+!.clang-format
 
 !*.cpp
 !*.hpp
