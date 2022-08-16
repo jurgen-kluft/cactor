@@ -1,8 +1,8 @@
-#include "xbase/x_target.h"
-#include "xbase/x_allocator.h"
-#include "xactor/x_actor.h"
+#include "cbase/c_target.h"
+#include "cbase/c_allocator.h"
+#include "cactor/c_actor.h"
 
-#include "xunittest/xunittest.h"
+#include "cunittest/xunittest.h"
 
 using namespace ncore;
 extern ncore::alloc_t* gTestAllocator;
