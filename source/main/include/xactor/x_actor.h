@@ -5,7 +5,7 @@
 #pragma once
 #endif
 
-namespace xcore
+namespace ncore
 {
     class alloc_t;
 
@@ -62,6 +62,6 @@ namespace xcore
 
     } // namespace actormodel
 
-} // namespace xcore
+} // namespace ncore
 
 #endif // __X_ACTOR_ACTOR_H__

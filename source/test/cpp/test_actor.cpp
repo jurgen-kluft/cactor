@@ -4,8 +4,8 @@
 
 #include "xunittest/xunittest.h"
 
-using namespace xcore;
-extern xcore::alloc_t* gTestAllocator;
+using namespace ncore;
+extern ncore::alloc_t* gTestAllocator;
 
 
 class msg_test : public actormodel::message_t

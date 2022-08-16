@@ -14,7 +14,7 @@
 #include <condition_variable>
 #endif
 
-namespace xcore
+namespace ncore
 {
     namespace actormodel
     {
@@ -23,7 +23,7 @@ namespace xcore
             const char* i = str;
             while (*i != '\0')
                 i++;
-            return calchash((const xbyte*)str, (u32)(i - str));
+            return calchash((const u8*)str, (u32)(i - str));
         }
 
         class worker_thread_t
@@ -40,10 +40,10 @@ namespace xcore
         public:
             void init(s32 initial, s32 maximum)
             {
-                ghSemaphore = ::CreateSemaphore(NULL,    // default security attributes
+                ghSemaphore = ::CreateSemaphore(nullptr,    // default security attributes
                                                 initial, // initial count
                                                 maximum, // maximum count
-                                                NULL);   // unnamed semaphore
+                                                nullptr);   // unnamed semaphore
             }
 
             void deinit() { CloseHandle(ghSemaphore); }
@@ -56,7 +56,7 @@ namespace xcore
                     case WAIT_FAILED: break;
                 }
             }
-            void release() { ::ReleaseSemaphore(ghSemaphore /*handle to semaphore*/, 1 /*increase count by one*/, NULL); }
+            void release() { ::ReleaseSemaphore(ghSemaphore /*handle to semaphore*/, 1 /*increase count by one*/, nullptr); }
 
             XCORE_CLASS_PLACEMENT_NEW_DELETE
         };
@@ -378,7 +378,7 @@ namespace xcore
         // @Note: Multiple Consumers
         void work_take(work_queue_t* queue, actor_t*& actor, message_t*& msg, u32& msgidx, u32& msgend)
         {
-            if (actor == NULL)
+            if (actor == nullptr)
             {
                 // This will make the calling thread block if the queue is empty
                 queue->pop(actor);
@@ -407,9 +407,9 @@ namespace xcore
                     // because there are still messages pending.
                     queue->push(actor);
                 }
-                actor = NULL;
+                actor = nullptr;
             }
-            msg = NULL;
+            msg = nullptr;
         }
 
         void mailbox_t::send(message_t* msg, actor_t* recipient) { work_add(m_work, m_actor, msg, recipient); }
@@ -517,4 +517,4 @@ namespace xcore
 
     } // namespace actormodel
 
-} // namespace xcore
+} // namespace ncore
