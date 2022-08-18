@@ -2,7 +2,7 @@
 #include "cbase/c_allocator.h"
 #include "cactor/c_actor.h"
 
-#include "cunittest/xunittest.h"
+#include "cunittest/cunittest.h"
 
 using namespace ncore;
 extern ncore::alloc_t* gTestAllocator;
