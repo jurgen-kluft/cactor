@@ -121,7 +121,7 @@ namespace ncore
         // creation, re-use and destruction of messages.
 
         // There are a fixed number of worker-threads, initialized according to what
-        // the user needs. The user can use the xsystem package to identify how
+        // the user needs. The user can use the csystem package to identify how
         // many physical and logical cores this machine has as well as how many
         // hardware threads.
 

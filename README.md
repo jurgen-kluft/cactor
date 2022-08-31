@@ -6,33 +6,32 @@ A tiny actor library focussing mainly on performance which means that:
 * Adding an actor to the system you need to supply a maximum size of the mailbox (performance)
 * Actor mailbox is thus fixed-size/bounded and will reject adding messages if full (no-copy, performance)
 * Actor can only send messages by pointer (no-copy, performance/simplicity)
-* Message will be send back to sender in xactor::returned(xmessage*) (re-use/performance)
-* Actor receives messages in xactor::received(xmessage*), actor has to switch:case on the message
+* Message will be send back to sender in actor_t::returned(message_t*) (re-use/performance)
+* Actor receives messages in actor_t::received(message_t*), actor has to switch:case on the message
   type manually. (simplicity/performance)
 
 ```c++
-    struct mydatamessage : public xmessage
+    struct mydatamessage : public message_t
     {
-        void    setup(xactor* from, xactor* to, msg_id_t id);
+        void    setup(actor_t* from, actor_t* to, msg_id_t id);
         xbyte   m_data[64];
     };
 ```
 
 ```c++
-    class myactor1 : public xactor
+    class myactor1 : public actor_t
     {
-        msg_id_t                 m_data_msg_id;
-        xfreelist<mydatamessage> m_data_msgs;
-
-        xmailbox*           m_mbox;
+        msg_id_t                  m_data_msg_id;
+        freelist_t<mydatamessage> m_data_msgs;
+        mailbox_t*                m_mbox;
 
     public:
-        virtual void setmailbox(xmailbox* mailbox)
+        virtual void setmailbox(mailbox_t* mailbox)
         {
             m_mbox = mailbox;
         }
 
-        virtual void received(xmessage* msg)
+        virtual void received(message_t* msg)
         {
             // Inspect the message and react
 
@@ -45,7 +44,7 @@ A tiny actor library focussing mainly on performance which means that:
             m_mbox->send(msg_to_send, msg->get_recipient());
         }
 
-        virtual void returned(xmessage*& msg)
+        virtual void returned(message_t*& msg)
         {
             if (msg->has_id(m_data_msg_id))
             {
@@ -58,10 +57,10 @@ A tiny actor library focussing mainly on performance which means that:
 ```
 
 ```c++
-xsystem*    system = xsystem::boot(2);
+system_t*    system = nsystem::boot(2);
 
-xactor*     actor1 = xnew<myactor1>();
-xactor*     actor2 = xnew<myactor2>();
+actor_t*     actor1 = g_New<myactor1>();
+actor_t*     actor2 = g_New<myactor2>();
 
 system->join(actor1);
 system->join(actor2);
