@@ -5,20 +5,18 @@
 #include "cunittest/cunittest.h"
 
 using namespace ncore;
-extern ncore::alloc_t* gTestAllocator;
-
 
 class msg_test : public actormodel::message_t
 {
 public:
-    msg_test(actormodel::actor_handle_t* sender)
+    msg_test(actormodel::actor_t* sender)
     {
         m_id     = actormodel::get_msgid("test");
         m_sender = sender;
     }
 };
 
-class actor_test : public actormodel::actor_t
+class actor_test : public actormodel::handler_t
 {
     actormodel::id_t       m_msgid;
 
