@@ -58,7 +58,7 @@ namespace ncore
             }
             void release() { ::ReleaseSemaphore(ghSemaphore /*handle to semaphore*/, 1 /*increase count by one*/, nullptr); }
 
-            XCORE_CLASS_PLACEMENT_NEW_DELETE
+            DCORE_CLASS_PLACEMENT_NEW_DELETE
         };
 
         class mutex_t
@@ -71,7 +71,7 @@ namespace ncore
             void lock() { EnterCriticalSection((CRITICAL_SECTION*)&ghMutex); }
             void unlock() { LeaveCriticalSection((CRITICAL_SECTION*)&ghMutex); }
 
-            XCORE_CLASS_PLACEMENT_NEW_DELETE
+            DCORE_CLASS_PLACEMENT_NEW_DELETE
         };
 #elif defined(TARGET_MAC)
         class semaphore_t
@@ -99,7 +99,7 @@ namespace ncore
                 cv.notify_one();
             }
 
-            XCORE_CLASS_PLACEMENT_NEW_DELETE
+            DCORE_CLASS_PLACEMENT_NEW_DELETE
         };
 
         class mutex_t
@@ -112,7 +112,7 @@ namespace ncore
             void lock() { pthread_mutex_lock(&ghMutex); }
             void unlock() { pthread_mutex_unlock(&ghMutex); }
 
-            XCORE_CLASS_PLACEMENT_NEW_DELETE
+            DCORE_CLASS_PLACEMENT_NEW_DELETE
         };
 #endif
 
@@ -258,7 +258,7 @@ namespace ncore
 
             s32 release(u32 idx, u32 end) { return m_queue.release(idx, end); }
 
-            XCORE_CLASS_PLACEMENT_NEW_DELETE
+            DCORE_CLASS_PLACEMENT_NEW_DELETE
         };
 
         class mailbox_t;
