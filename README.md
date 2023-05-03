@@ -1,4 +1,4 @@
-# xcore actor library (C++)
+# ccore actor library (C++)
 
 A tiny actor library focussing mainly on performance which means that:
 
