@@ -1,30 +1,24 @@
-#include "cbase/c_allocator.h"
+#include "ccore/c_allocator.h"
 #include "cbase/c_hash.h"
-#include "cbase/c_math.h"
+#include "cbase/c_integer.h"
 #include "cactor/c_actor.h"
 
 #ifdef TARGET_PC
-#include <windows.h>
-#include <stdio.h>
+#    include <windows.h>
+#    include <stdio.h>
 #endif
 
 #ifdef TARGET_MAC
-#include <stdio.h>
-#include <mutex>
-#include <condition_variable>
+#    include <stdio.h>
+#    include <mutex>
+#    include <condition_variable>
 #endif
 
 namespace ncore
 {
     namespace actormodel
     {
-        id_t get_msgid(const char* str)
-        {
-            const char* i = str;
-            while (*i != '\0')
-                i++;
-            return calchash((const u8*)str, (u32)(i - str));
-        }
+        id_t get_msgid(const char* str) { return (id_t)nhash::strhash(str); }
 
         class worker_thread_t
         {
@@ -40,10 +34,10 @@ namespace ncore
         public:
             void init(s32 initial, s32 maximum)
             {
-                ghSemaphore = ::CreateSemaphore(nullptr,    // default security attributes
-                                                initial, // initial count
-                                                maximum, // maximum count
-                                                nullptr);   // unnamed semaphore
+                ghSemaphore = ::CreateSemaphore(nullptr,  // default security attributes
+                                                initial,  // initial count
+                                                maximum,  // maximum count
+                                                nullptr); // unnamed semaphore
             }
 
             void deinit() { CloseHandle(ghSemaphore); }
@@ -510,10 +504,7 @@ namespace ncore
         actor_t* actor_join(actormodel_t* system, handler_t* handler) { return system->join(handler); }
         void     actor_leave(actormodel_t* system, actor_t* actor) { system->leave(actor); }
 
-        void send(actormodel_t* system, actor_t* sender, message_t* msg, actor_t* recipient)
-        {
-            work_add(&system->m_work_queue, sender, msg, recipient);
-        }
+        void send(actormodel_t* system, actor_t* sender, message_t* msg, actor_t* recipient) { work_add(&system->m_work_queue, sender, msg, recipient); }
 
     } // namespace actormodel
 
