@@ -121,12 +121,10 @@ namespace ncore
 
         // R 16 | W 16
 
-        const u32 WRITE_INDEX_SHIFT = 0;
         const u32 WRITE_INDEX_BITS  = 12;
-        const u32 WRITE_INDEX_MASK  = ((u32(1) << WRITE_INDEX_BITS) - 1) << WRITE_INDEX_SHIFT;
-        const u32 READ_INDEX_SHIFT  = 16;
+        const u32 WRITE_INDEX_MASK  = ((u32(1) << WRITE_INDEX_BITS) - 1);
         const u32 READ_INDEX_BITS   = 12;
-        const u32 READ_INDEX_MASK   = ((u32(1) << READ_INDEX_BITS) - 1) << READ_INDEX_SHIFT;
+        const u32 READ_INDEX_MASK   = ((u32(1) << READ_INDEX_BITS) - 1);
         const u32 MAX_MESSAGES      = (u32(1) << WRITE_INDEX_BITS);
 
         // Queue using a ringbuffer, it is important that this queue
@@ -140,14 +138,16 @@ namespace ncore
         {
             u32 const m_size;
             void**    m_queue;
-            s32       m_readwrite;
+            u32       m_read;
+            u32       m_write;
             mutex_t   m_lock;
 
         public:
             inline queue_t(u32 size)
                 : m_size(size)
                 , m_queue(nullptr)
-                , m_readwrite(0)
+                , m_read(0)
+                , m_write(0)
             {
             }
 
@@ -169,30 +169,26 @@ namespace ncore
             s32 push(void* p)
             {
                 m_lock.lock();
-                s32 const crw = m_readwrite;
-                s32 const cw  = (crw & WRITE_INDEX_MASK);
-                s32 const nw  = cw + 1;
-                s32 const nrw = (crw & READ_INDEX_MASK) | (nw & WRITE_INDEX_MASK);
-                m_readwrite   = nrw;
-                m_queue[cw]   = p;
+                s32 const r  = m_read;
+                s32 const w  = m_write;
+                s32 const nw = (w + 1) & WRITE_INDEX_MASK;
+                m_write      = nw;
+                m_queue[w]   = p;
                 m_lock.unlock();
 
                 // If the QUEUED flag was 'false' and we have pushed a new piece of work into
                 // the queue and before the queue was empty we are the one that should return
                 // '1' to indicate that the actor should be queued-up for processing.
-                s32 const wi = (crw & WRITE_INDEX_MASK) >> WRITE_INDEX_SHIFT;
-                s32 const ri = (crw & READ_INDEX_MASK) >> READ_INDEX_SHIFT;
-                return (ri == wi) ? 1 : 0;
+                return (r == w) ? 1 : 0;
             }
 
             // Single 'consumer'
             void claim(u32& idx, u32& end)
             {
                 m_lock.lock();
-                s32 i = m_readwrite;
+                idx = m_read;
+                end = m_write;
                 m_lock.unlock();
-                idx = u32((i & READ_INDEX_MASK) >> READ_INDEX_SHIFT);
-                end = u32((i & WRITE_INDEX_MASK) >> WRITE_INDEX_SHIFT);
             }
 
             // Single 'consumer'
@@ -208,16 +204,13 @@ namespace ncore
                 // This is our new 'read' index
                 u32 const r = end & (m_size - 1);
                 m_lock.lock();
-                s32       o = m_readwrite;
-                s32       w = u32((o & WRITE_INDEX_MASK) >> WRITE_INDEX_SHIFT);
-                s32       n = ((r & READ_INDEX_MASK) << READ_INDEX_SHIFT) | (w << WRITE_INDEX_SHIFT);
-                s32 const q = (r != w);
-                m_readwrite = n;
+                s32 const q = (m_read != m_write);
+                m_read = r;
                 m_lock.unlock();
 
-                // So we now have updated 'm_readwrite' with 'read'/'write' and detected that we have
-                // pushed a message into an empty queue, so we are the ones to indicate that the actor
-                // should be queued.
+                // So we now have updated 'm_readwrite' with 'read'/'write' and detected that we do not
+                // have an empty queue yet, so we are the ones to indicate that the actor should be
+                // queued again.
                 return q;
             }
         };
