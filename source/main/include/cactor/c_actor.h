@@ -2,14 +2,14 @@
 #define __C_ACTOR_ACTOR_H__
 #include "ccore/c_target.h"
 #ifdef USE_PRAGMA_ONCE
-#pragma once
+#    pragma once
 #endif
 
 namespace ncore
 {
     class alloc_t;
 
-    namespace actormodel
+    namespace nactor
     {
         class message_t;
         class messages_t;
@@ -22,7 +22,7 @@ namespace ncore
         // This makes the actor be able to control/limit the messages that it
         // creates and sends.
         // The necessary information for a message is where the message came
-        // from so that the receiving actor can send a message back to the
+        // from so that the receiving actor can send the message back to the
         // sender.
         // We base the receiving of messages on simple structs, messages are
         // always send back to the sender for garbage collection to simplify
@@ -30,7 +30,7 @@ namespace ncore
 
         id_t get_msgid(const char*);
 
-        class actormodel_t;
+        class system_t;
         struct actor_t;
 
         class message_t
@@ -53,14 +53,22 @@ namespace ncore
             virtual void returned(message_t*& msg) = 0;
         };
 
-        actormodel_t* create_system(alloc_t* allocator, s32 num_threads, s32 max_actors);
-        void          destroy_system(alloc_t* allocator, actormodel_t* system);
+        system_t* create_system(alloc_t* allocator, s32 num_threads, s32 max_actors);
+        void      destroy_system(alloc_t* allocator, system_t* system);
 
-        actor_t* actor_join(actormodel_t* system, handler_t* handler);
-        void     actor_leave(actormodel_t* system, actor_t* actor);
-        void     actor_send(actormodel_t* system, actor_t* sender, message_t* msg, actor_t* recipient);
+        actor_t* actor_join(system_t* system, handler_t* handler);
+        void     actor_leave(system_t* system, actor_t* actor);
 
-    } // namespace actormodel
+        // Actors by themselves can send messages to other actors, however, the user can also send messages
+        // to actors. However, if as a user you want to send a message to an actor, then depending on the
+        // thread you are on, that thread should have its own actor instance to use as the sender. This
+        // actor will have to have a pool of messages to use for sending and it will receive back those
+        // messages for garbage collection. So the user will have to create a class derived from handler_t
+        // and implement the received and returned functions. With an instance of that class the user can
+        // call actor_join to get an actor instance that can be used as the sender for messages.
+        void     actor_send(system_t* system, actor_t* sender, message_t* msg, actor_t* recipient);
+
+    } // namespace nactor
 
 } // namespace ncore
 

@@ -2,6 +2,7 @@
 #include "cbase/c_hash.h"
 #include "cbase/c_integer.h"
 #include "cactor/c_actor.h"
+#include "cactor/private/c_queue.h"
 
 #ifdef TARGET_PC
 #    include <windows.h>
@@ -16,7 +17,7 @@
 
 namespace ncore
 {
-    namespace actormodel
+    namespace nactor
     {
         id_t get_msgid(const char* str) { return (id_t)nhash::strhash(str); }
 
@@ -121,129 +122,41 @@ namespace ncore
 
         // R 16 | W 16
 
-        const u32 WRITE_INDEX_BITS  = 12;
-        const u32 WRITE_INDEX_MASK  = ((u32(1) << WRITE_INDEX_BITS) - 1);
-        const u32 READ_INDEX_BITS   = 12;
-        const u32 READ_INDEX_MASK   = ((u32(1) << READ_INDEX_BITS) - 1);
-        const u32 MAX_MESSAGES      = (u32(1) << WRITE_INDEX_BITS);
-
-        // Queue using a ringbuffer, it is important that this queue
-        // is initialized with a size that will never be reached. This queue
-        // will fail HARD when messages are queued up and the size is exceeding
-        // the initialized size.
-        // The initialized size of this queue cannot exceed 4096 messages.
-        // When writing a system using this actor-model messages should be
-        // pre-allocated (bounded) and not dynamically allocated.
-        class queue_t
-        {
-            u32 const m_size;
-            void**    m_queue;
-            u32       m_read;
-            u32       m_write;
-            mutex_t   m_lock;
-
-        public:
-            inline queue_t(u32 size)
-                : m_size(size)
-                , m_queue(nullptr)
-                , m_read(0)
-                , m_write(0)
-            {
-            }
-
-            void init(alloc_t* allocator)
-            {
-                m_queue = (void**)allocator->allocate(m_size * sizeof(void*), sizeof(void*));
-                m_lock.init();
-            }
-
-            void deinit(alloc_t* allocator)
-            {
-                allocator->deallocate(m_queue);
-                m_lock.deinit();
-            }
-
-            inline u32 size() const { return m_size; }
-
-            // Multiple 'producers'
-            s32 push(void* p)
-            {
-                m_lock.lock();
-                s32 const r  = m_read;
-                s32 const w  = m_write;
-                s32 const nw = (w + 1) & WRITE_INDEX_MASK;
-                m_write      = nw;
-                m_queue[w]   = p;
-                m_lock.unlock();
-
-                // If the QUEUED flag was 'false' and we have pushed a new piece of work into
-                // the queue and before the queue was empty we are the one that should return
-                // '1' to indicate that the actor should be queued-up for processing.
-                return (r == w) ? 1 : 0;
-            }
-
-            // Single 'consumer'
-            void claim(u32& idx, u32& end)
-            {
-                m_lock.lock();
-                idx = m_read;
-                end = m_write;
-                m_lock.unlock();
-            }
-
-            // Single 'consumer'
-            void deque(u32& idx, u32 end, void*& p)
-            {
-                p = m_queue[idx & (m_size - 1)];
-                idx++;
-            }
-
-            // Single 'consumer'
-            s32 release(u32 idx, u32 end)
-            {
-                // This is our new 'read' index
-                u32 const r = end & (m_size - 1);
-                m_lock.lock();
-                s32 const q = (m_read != m_write);
-                m_read = r;
-                m_lock.unlock();
-
-                // So we now have updated 'm_readwrite' with 'read'/'write' and detected that we do not
-                // have an empty queue yet, so we are the ones to indicate that the actor should be
-                // queued again.
-                return q;
-            }
-        };
+        const u32 WRITE_INDEX_BITS = 12;
+        const u32 WRITE_INDEX_MASK = ((u32(1) << WRITE_INDEX_BITS) - 1);
+        const u32 READ_INDEX_BITS  = 12;
+        const u32 READ_INDEX_MASK  = ((u32(1) << READ_INDEX_BITS) - 1);
+        const u32 MAX_MESSAGES     = (u32(1) << WRITE_INDEX_BITS);
 
         class message_queue_t
         {
-            queue_t m_queue;
+            mpsc_queue_t* m_queue;
 
         public:
-            inline message_queue_t(u32 size)
-                : m_queue(size)
+            inline message_queue_t()
+                : m_queue(nullptr)
             {
             }
 
-            void init(alloc_t* allocator) { m_queue.init(allocator); }
-            void deinit(alloc_t* allocator) { m_queue.deinit(allocator); }
+            void init(alloc_t* allocator, s32 producer_count, u32 queue_size) { m_queue = mpsc_queue_create(allocator, producer_count, queue_size); }
+            void deinit(alloc_t* allocator) { queue_destroy(allocator, m_queue); }
 
-            s32 push(message_t* msg)
+            bool push(s32 producer_index, message_t* msg)
             {
-                void* p = (void*)msg;
-                return m_queue.push(p);
+                u64 p = (u64)msg;
+                return queue_enqueue(m_queue, producer_index, p);
             }
 
-            void claim(u32& idx, u32& end) { m_queue.claim(idx, end); }
+            void claim(u32& idx, u32& end) { queue_inspect(m_queue, idx, end); }
 
             void deque(u32& idx, u32 end, message_t*& msg)
             {
-                void* p;
-                m_queue.deque(idx, end, p);
+                u64 p;
+                queue_dequeue(m_queue, idx, end, p);
                 msg = (message_t*)p;
             }
 
-            s32 release(u32 idx, u32 end) { return m_queue.release(idx, end); }
+            s8 release(u32 idx, u32 end) { return queue_release(m_queue, idx, end); }
 
             DCORE_CLASS_PLACEMENT_NEW_DELETE
         };
@@ -252,6 +165,7 @@ namespace ncore
 
         struct actor_t
         {
+            s32        m_index;
             handler_t* m_actor;
             mailbox_t* m_mailbox;
         };
@@ -331,20 +245,20 @@ namespace ncore
             work_queue_t*   m_work;
             message_queue_t m_messages;
 
-            void init(actor_t* actor, work_queue_t* work, alloc_t* allocator, s32 max_messages)
+            void init(actor_t* actor, work_queue_t* work, alloc_t* allocator, s32 max_actors, s32 max_messages)
             {
                 m_actor = actor;
                 m_work  = work;
-                m_messages.init(allocator);
+                m_messages.init(allocator, max_actors, max_messages);
             }
 
             void deinit(alloc_t* allocator) { m_messages.deinit(allocator); }
 
             void send(message_t* msg, actor_t* recipient);
-            s32  push(message_t* msg);
+            s32  push(s32 producer_index, message_t* msg);
             void claim(u32& idx, u32& end); // return [i,end] range of messages
             void deque(u32& idx, u32 end, message_t*& msg);
-            s32  release(u32 idx, u32 end); // return 1 when there are messages pending
+            s8 release(u32 idx, u32 end); // return 1 when there are more messages queued up
         };
 
         // Work queue init and deinit
@@ -354,7 +268,7 @@ namespace ncore
         // @Note: Multiple Producers
         void work_add(work_queue_t* queue, actor_t* sender, message_t* msg, actor_t* recipient)
         {
-            if (sender->m_mailbox->push(msg) == 1)
+            if (sender->m_mailbox->push(sender->m_index, msg) == 1)
             {
                 // mailbox indicated that we have pushed a message and the actor is already
                 // marked as 'idle' and we are the one here to push him in the work-queue.
@@ -400,10 +314,10 @@ namespace ncore
         }
 
         void mailbox_t::send(message_t* msg, actor_t* recipient) { work_add(m_work, m_actor, msg, recipient); }
-        s32  mailbox_t::push(message_t* msg) { return (m_messages.push(msg)); }
+        s32  mailbox_t::push(s32 producer_index, message_t* msg) { return (m_messages.push(producer_index, msg)); }
         void mailbox_t::claim(u32& idx, u32& end) { m_messages.claim(idx, end); }
         void mailbox_t::deque(u32& idx, u32 end, message_t*& msg) { m_messages.deque(idx, end, msg); }
-        s32  mailbox_t::release(u32 idx, u32 end) { return (m_messages.release(idx, end)); }
+        s8 mailbox_t::release(u32 idx, u32 end) { return m_messages.release(idx, end); }
 
         struct ctxt_t
         {
@@ -463,12 +377,11 @@ namespace ncore
             }
         }
 
-        class actormodel_t
+        class system_t
         {
         public:
-            void start(s32 num_threads, s32 max_actors);
-            void stop();
-
+            void     start(s32 num_threads, s32 max_actors);
+            void     stop();
             actor_t* join(handler_t* actor);
             void     leave(actor_t* actor);
 
@@ -476,13 +389,12 @@ namespace ncore
             s32              m_numthreads;
             work_queue_t     m_work_queue;
             worker_thread_t* m_thread_workers;
-
-            s32      m_num_actors;
-            s32      m_max_actors;
-            actor_t* m_actors;
+            s32              m_num_actors;
+            s32              m_max_actors;
+            actor_t*         m_actors;
         };
 
-        void actormodel_t::start(s32 num_threads, s32 max_actors)
+        void system_t::start(s32 num_threads, s32 max_actors)
         {
             m_numthreads = num_threads;
             m_work_queue.init(m_allocator, max_actors);
@@ -492,13 +404,13 @@ namespace ncore
                 init(&m_actors[i]);
         }
 
-        void actormodel_t::stop() {}
+        void system_t::stop() {}
 
-        actor_t* actor_join(actormodel_t* system, handler_t* handler) { return system->join(handler); }
-        void     actor_leave(actormodel_t* system, actor_t* actor) { system->leave(actor); }
+        actor_t* actor_join(system_t* system, handler_t* handler) { return system->join(handler); }
+        void     actor_leave(system_t* system, actor_t* actor) { system->leave(actor); }
 
-        void send(actormodel_t* system, actor_t* sender, message_t* msg, actor_t* recipient) { work_add(&system->m_work_queue, sender, msg, recipient); }
+        void send(system_t* system, actor_t* sender, message_t* msg, actor_t* recipient) { work_add(&system->m_work_queue, sender, msg, recipient); }
 
-    } // namespace actormodel
+    } // namespace nactor
 
 } // namespace ncore
