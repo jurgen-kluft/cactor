@@ -32,6 +32,7 @@ namespace ncore
     void          queue_destroy(alloc_t* allocator, spsc_queue_t* queue);
     bool          queue_enqueue(spsc_queue_t* queue, u64 item);
     bool          queue_dequeue(spsc_queue_t* queue, u64& item);
+    s32           queue_dequeue_multiple(spsc_queue_t* queue, u64* items, s32 count);
 
     struct mpsc_queue_t;
     mpsc_queue_t* mpsc_queue_create(alloc_t* allocator, s32 producer_count, s32 item_count);

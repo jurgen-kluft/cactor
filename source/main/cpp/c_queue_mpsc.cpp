@@ -9,6 +9,21 @@
 
 namespace ncore
 {
+
+    // 1024 slots, 8 actors/threads => 64KB of queue data
+    // each actor needs to have such a queue, so 64KB * 8 = 512KB
+    // the more actors and messages that can be in flight, the more memory we need
+    // 16 actors, 1024 slots => 1MB of queue data
+    // 32 actors, 2048 slots => 4MB of queue data
+
+    // Using N spsc queues and 'fetch_or' to indicate that a queue has elements and 'fetch_and' to reset the state?
+    // Every job thread has an index, so we can use that index to determine which queue to push to.
+    // The consumer thread can use 'fetch_and' to reset the state of the queues, the old state indicates which queues have
+    // elements. We need to drain those queus and fill our local ring buffer with the elements, we can return a range
+    // to the caller to indicate the range of elements that are available.
+
+    // We also need to integrate 'blocking' and waking up the consumer thread when there are elements in the queue.
+
     namespace mpsc
     {
         static constexpr int_t c_cacheline_size = 64;
@@ -30,13 +45,23 @@ namespace ncore
             }
 
             bool is_empty() const { return m_reader == m_writer; }
-            u32 cursor() const { return m_reader; }
+            u32  cursor() const { return m_reader; }
 
             void add(u64 item)
             {
-                u32 idx      = m_writer;
-                m_slots[idx] = item;
-                m_writer     = (idx + 1) % m_capacity;
+                m_slots[m_writer++] = item;
+                if (m_writer == m_capacity)
+                    m_writer = 0;
+            }
+
+            void add_multiple(const u64* items, u32 count)
+            {
+                for (u32 i = 0; i < count; ++i)
+                {
+                    m_slots[m_writer++] = items[i];
+                    if (m_writer == m_capacity)
+                        m_writer = 0;
+                }
             }
 
             bool inspect(u32& begin, u32& end) const
@@ -51,7 +76,9 @@ namespace ncore
             u64 read(u32& idx) const
             {
                 u32 const i = idx;
-                idx         = (i + 1) % m_capacity;
+                idx++;
+                if (idx == m_capacity)
+                    idx = 0;
                 return m_slots[i];
             }
         };
@@ -84,19 +111,23 @@ namespace ncore
             // of the queues have pending elements.
             bool inspect(u32& begin, u32& end)
             {
-                // Fetch the state of the queues and reset the state
+                // Fetch the state of the queues and reset to 0
                 s32 old_state = m_queues_state.fetch_and(0, std::memory_order_acquire);
                 if (old_state == 0)
                     return false;
 
-                // Drain every producer queue
+                // Drain every producer queue, using batch dequeue
+                u64       items[8];
+                s32 const max_items = 8;
                 for (s32 i = 0; i < m_num_queues; ++i)
                 {
                     spsc_queue_t* queue = m_producer_queues[i];
-                    u64           item;
-                    while (queue_dequeue(queue, item))
+                    while (true)
                     {
-                        m_consumer_ring->add(item);
+                        s32 const num_dequeued = queue_dequeue_multiple(queue, items, max_items);
+                        if (num_dequeued == 0)
+                            break;
+                        m_consumer_ring->add_multiple(items, num_dequeued);
                     }
                 }
                 return m_consumer_ring->inspect(begin, end);
@@ -111,25 +142,11 @@ namespace ncore
                 if (result == 0)
                 {
                     s32 const state = m_queues_state.load(std::memory_order_acquire);
-                    result = state == 0 ? 0 : 1;
+                    result          = state == 0 ? 0 : 1;
                 }
                 return result;
             }
         };
-
-        // 1024 slots, 8 actors/threads => 64KB of queue data
-        // each actor needs to have such a queue, so 64KB * 8 = 512KB
-        // the more actors and messages that can be in flight, the more memory we need
-        // 16 actors, 1024 slots => 1MB of queue data
-        // 32 actors, 2048 slots => 4MB of queue data
-
-        // What about using N spsc queues and 'fetch_or= to indicate that a queue has elements and fetch_and to reset the state?
-        // Every job thread has an index, so we can use that index to determine which queue to push to.
-        // The consumer thread can use fetch_and to reset the state of the queues, the old state indicates which queues have
-        // elements. We need to drain those queus and fill our local ring buffer with the elements, we can return a range
-        // to the caller to indicate the range of elements that are available.
-
-        // We also need to integrate 'blocking' and waking up the consumer thread when there are elements in the queue.
 
         queue_t* create_queue(alloc_t* allocator, s32 producer_count, s32 item_count)
         {
