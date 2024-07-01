@@ -12,10 +12,7 @@ namespace ncore
     namespace nactor
     {
         class message_t;
-        class messages_t;
         class actor_t;
-        class work_t;
-        class worker_t;
         typedef u64 id_t;
 
         // For messages we can have one allocator per actor for sending messages.
@@ -53,20 +50,23 @@ namespace ncore
             virtual void returned(message_t*& msg) = 0;
         };
 
-        system_t* create_system(alloc_t* allocator, s32 num_threads, s32 max_actors);
-        void      destroy_system(alloc_t* allocator, system_t* system);
+        system_t* create_system(alloc_t* allocator, s32 num_threads, s32 max_actors, s32 max_messages, s32 max_producers);
+        void      destroy_system(system_t* system);
 
         actor_t* actor_join(system_t* system, handler_t* handler);
         void     actor_leave(system_t* system, actor_t* actor);
 
-        // Actors by themselves can send messages to other actors, however, the user can also send messages
-        // to actors. However, if as a user you want to send a message to an actor, then depending on the
+        // Actors by themselves are able to send messages to other actors, however, the user would also
+        // like to send messages to actors.
+        // Thus, if as a user you want to send a message to an actor, then depending on the
         // thread you are on, that thread should have its own actor instance to use as the sender. This
-        // actor will have to have a pool of messages to use for sending and it will receive back those
+        // actor will have to have its own pool of messages to use for sending and it will receive back those
         // messages for garbage collection. So the user will have to create a class derived from handler_t
         // and implement the received and returned functions. With an instance of that class the user can
         // call actor_join to get an actor instance that can be used as the sender for messages.
-        void     actor_send(system_t* system, actor_t* sender, message_t* msg, actor_t* recipient);
+        // One thing to keep in mind though, is that the 'returned' function can be called at any time
+        // so threadsafe considerations should be taken into account.
+        void actor_send(system_t* system, actor_t* sender, message_t* msg, actor_t* recipient);
 
     } // namespace nactor
 
