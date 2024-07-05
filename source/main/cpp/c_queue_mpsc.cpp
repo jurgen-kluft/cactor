@@ -197,6 +197,8 @@ namespace ncore
 
     bool queue_dequeue(mpsc_queue_t* _queue, u32& idx, u32 end, u64& item)
     {
+        if (idx == end)
+            return false;
         mpsc::queue_t* queue = (mpsc::queue_t*)_queue;
         item                 = queue->read(idx);
     }

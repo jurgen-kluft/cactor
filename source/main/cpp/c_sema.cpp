@@ -96,20 +96,20 @@ namespace ncore
         return (sys_sema_t*)data;
     }
 
-    void destroy(alloc_t* allocator, sys_sema_t* semaphore)
+    void sema_destroy(alloc_t* allocator, sys_sema_t* semaphore)
     {
         sys_sema_instance_t* data = (sys_sema_instance_t*)semaphore;
         semaphore_destroy(mach_task_self(), data->_sema);
         allocator->destruct<sys_sema_instance_t>(data);
     }
 
-    void post(sys_sema_t* semaphore)
+    void sema_post(sys_sema_t* semaphore)
     {
         sys_sema_instance_t* data = (sys_sema_instance_t*)semaphore;
         semaphore_signal(data->_sema);
     }
 
-    void post(sys_sema_t* semaphore, s32 count)
+    void sema_post(sys_sema_t* semaphore, s32 count)
     {
         sys_sema_instance_t* data = (sys_sema_instance_t*)semaphore;
         while (count-- > 0)
@@ -118,7 +118,7 @@ namespace ncore
         }
     }
 
-    void wait(sys_sema_t* semaphore)
+    void sema_wait(sys_sema_t* semaphore)
     {
         sys_sema_instance_t* data = (sys_sema_instance_t*)semaphore;
         semaphore_wait(data->_sema);
@@ -147,7 +147,7 @@ namespace ncore
         return (lw_sema_t*)data;
     }
 
-    void destroy(alloc_t* allocator, lw_sema_t* semaphore)
+    void sema_destroy(alloc_t* allocator, lw_sema_t* semaphore)
     {
         lw_sema_instance_t* data = (lw_sema_instance_t*)semaphore;
         semaphore_destroy(mach_task_self(), data->m_sys_sema_instance._sema);
@@ -173,24 +173,24 @@ namespace ncore
         if (oldCount <= 0)
         {
             sys_sema_t* sys_sema = (sys_sema_t*)&s->m_sys_sema_instance;
-            wait(sys_sema);
+            sema_wait(sys_sema);
         }
     }
 
-    bool try_wait(lw_sema_t* sema)
+    bool sema_try_wait(lw_sema_t* sema)
     {
         lw_sema_instance_t* s        = (lw_sema_instance_t*)sema;
         s32                 oldCount = s->m_count.load(std::memory_order_relaxed);
         return (oldCount > 0 && s->m_count.compare_exchange_strong(oldCount, oldCount - 1, std::memory_order_acquire));
     }
 
-    void wait(lw_sema_t* sema)
+    void sema_wait(lw_sema_t* sema)
     {
-        if (!try_wait(sema))
+        if (!sema_try_wait(sema))
             s_wait_with_partial_spinning(sema);
     }
 
-    void post(lw_sema_t* sema, s32 count)
+    void sema_post(lw_sema_t* sema, s32 count)
     {
         lw_sema_instance_t* s         = (lw_sema_instance_t*)sema;
         s32                 oldCount  = s->m_count.fetch_add(count, std::memory_order_release);
@@ -198,7 +198,7 @@ namespace ncore
         if (toRelease > 0)
         {
             sys_sema_t* sys_sema = (sys_sema_t*)&s->m_sys_sema_instance;
-            post(sys_sema, toRelease);
+            sema_post(sys_sema, toRelease);
         }
     }
 

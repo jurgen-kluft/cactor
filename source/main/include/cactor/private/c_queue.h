@@ -16,7 +16,7 @@ namespace ncore
     // Single-Producer/Single-Consumer (SPSC)
     //
     // Example:
-    //    mpmc_queue_t* queue = mpmc_queue_create(allocator, 10);
+    //    mpmc_queue_blocking_t* queue = mpmc_queue_create(allocator, 10);
     //    u64 itemA = 0;
     //    u64 itemB = 1;
     //    queue_enqueue(queue, itemA);
@@ -27,26 +27,42 @@ namespace ncore
     //    queue_dequeue(queue, item);
     //    queue_destroy(queue);
 
-    struct spsc_queue_t;
-    spsc_queue_t* spsc_queue_create(alloc_t* allocator, s32 item_count);
-    void          queue_destroy(alloc_t* allocator, spsc_queue_t* queue);
-    bool          queue_enqueue(spsc_queue_t* queue, u64 item);
-    bool          queue_dequeue(spsc_queue_t* queue, u64& item);
-    s32           queue_dequeue_multiple(spsc_queue_t* queue, u64* items, s32 count);
-
+    // -----------------------------------------------------------------------------------------------------------------------
+    // -----------------------------------------------------------------------------------------------------------------------
     struct mpsc_queue_t;
     mpsc_queue_t* mpsc_queue_create(alloc_t* allocator, s32 producer_count, s32 item_count);
     void          queue_destroy(alloc_t* allocator, mpsc_queue_t* queue);
     bool          queue_enqueue(mpsc_queue_t* queue, s32 producer_index, u64 item);
     bool          queue_inspect(mpsc_queue_t* _queue, u32& begin, u32& end);
     bool          queue_dequeue(mpsc_queue_t* _queue, u32& idx, u32 end, u64& item);
-    s8            queue_release(mpsc_queue_t* _queue, u32 idx, u32 end);
 
-    struct local_queue_t;
-    local_queue_t* local_queue_create(alloc_t* allocator, s32 item_count);
-    void           queue_destroy(alloc_t* allocator, local_queue_t* queue);
-    bool           queue_enqueue(local_queue_t* queue, u64 item);
-    bool           queue_dequeue(local_queue_t* queue, u64& item);
+    template <typename T> T* queue_dequeue(mpsc_queue_t* _queue, u32& idx, u32 end)
+    {
+        u64 item;
+        if (queue_dequeue(_queue, idx, end, item))
+        {
+            return (T*)item;
+        }
+        return nullptr;
+    }
+
+    s8 queue_release(mpsc_queue_t* _queue, u32 idx, u32 end);
+
+    // -----------------------------------------------------------------------------------------------------------------------
+    // -----------------------------------------------------------------------------------------------------------------------
+    struct mpmc_queue_blocking_t;
+    mpmc_queue_blocking_t* mpmc_queue_create(alloc_t* allocator, s32 items);
+    void                   queue_destroy(alloc_t* allocator, mpmc_queue_blocking_t* queue);
+    bool                   queue_enqueue(mpmc_queue_blocking_t* queue, u64 item);
+    bool                   queue_dequeue(mpmc_queue_blocking_t* queue, u64& item);
+
+    template <typename T> T* queue_dequeue(mpmc_queue_blocking_t* _queue)
+    {
+        u64 item;
+        if (queue_dequeue(_queue, idx, end, item))
+            return (T*)item;
+        return nullptr;
+    }
 
 } // namespace ncore
 

@@ -6,17 +6,6 @@
 
 #include <thread>
 
-#ifdef TARGET_PC
-#    include <windows.h>
-#    include <stdio.h>
-#endif
-
-#ifdef TARGET_MAC
-#    include <stdio.h>
-#    include <mutex>
-#    include <condition_variable>
-#endif
-
 namespace ncore
 {
     namespace nactor
@@ -25,99 +14,15 @@ namespace ncore
 
         struct worker_thread_t
         {
-            void start(work_queue_t* work);
+            void start(mpmc_queue_blocking_t* work);
             void stop();
 
         protected:
-            void tick(work_queue_t* work, ctxt_t* ctx);
-            void entry(worker_thread_t* thread, work_queue_t* work);
+            bool tick(mpmc_queue_blocking_t* work, ctxt_t* ctx);
+            void entry(worker_thread_t* thread, mpmc_queue_blocking_t* work);
 
             std::thread m_thread;
         };
-
-#ifdef TARGET_PC
-        class semaphore_t
-        {
-            HANDLE ghSemaphore;
-
-        public:
-            void init(s32 initial, s32 maximum)
-            {
-                ghSemaphore = ::CreateSemaphore(nullptr,  // default security attributes
-                                                initial,  // initial count
-                                                maximum,  // maximum count
-                                                nullptr); // unnamed semaphore
-            }
-
-            void deinit() { CloseHandle(ghSemaphore); }
-            void request()
-            {
-                DWORD dwWaitResult = WaitForSingleObject(ghSemaphore, INFINITE);
-                switch (dwWaitResult)
-                {
-                    case WAIT_OBJECT_0: break; // The semaphore object was signaled.
-                    case WAIT_FAILED: break;
-                }
-            }
-            void release() { ::ReleaseSemaphore(ghSemaphore /*handle to semaphore*/, 1 /*increase count by one*/, nullptr); }
-
-            DCORE_CLASS_PLACEMENT_NEW_DELETE
-        };
-
-        class mutex_t
-        {
-            CRITICAL_SECTION ghMutex;
-
-        public:
-            void init() { InitializeCriticalSectionAndSpinCount((CRITICAL_SECTION*)&ghMutex, 4000); }
-            void deinit() { DeleteCriticalSection((CRITICAL_SECTION*)&ghMutex); }
-            void lock() { EnterCriticalSection((CRITICAL_SECTION*)&ghMutex); }
-            void unlock() { LeaveCriticalSection((CRITICAL_SECTION*)&ghMutex); }
-
-            DCORE_CLASS_PLACEMENT_NEW_DELETE
-        };
-#elif defined(TARGET_MAC)
-        class semaphore_t
-        {
-            size_t                  avail;
-            std::mutex              m;
-            std::condition_variable cv;
-
-        public:
-            void init(s32 initial, s32 maximum) { avail = maximum; }
-
-            void deinit() {}
-
-            void request()
-            {
-                std::unique_lock<std::mutex> lk(m);
-                cv.wait(lk, [this] { return avail > 0; });
-                avail--;
-            }
-
-            void release()
-            {
-                std::lock_guard<std::mutex> lk(m);
-                avail++;
-                cv.notify_one();
-            }
-
-            DCORE_CLASS_PLACEMENT_NEW_DELETE
-        };
-
-        class mutex_t
-        {
-            pthread_mutex_t ghMutex;
-
-        public:
-            void init() { pthread_mutex_init(&ghMutex, 0); }
-            void deinit() { pthread_mutex_destroy(&ghMutex); }
-            void lock() { pthread_mutex_lock(&ghMutex); }
-            void unlock() { pthread_mutex_unlock(&ghMutex); }
-
-            DCORE_CLASS_PLACEMENT_NEW_DELETE
-        };
-#endif
 
         // We base the receiving of messages on simple structs, messages are
         // always send back to the sender for garbage collection to simplify
@@ -127,47 +32,6 @@ namespace ncore
         // the user needs. The user can use the csystem package to identify how
         // many physical and logical cores this machine has as well as how many
         // hardware threads.
-
-        // R 16 | W 16
-
-        const u32 WRITE_INDEX_BITS = 12;
-        const u32 WRITE_INDEX_MASK = ((u32(1) << WRITE_INDEX_BITS) - 1);
-        const u32 READ_INDEX_BITS  = 12;
-        const u32 READ_INDEX_MASK  = ((u32(1) << READ_INDEX_BITS) - 1);
-        const u32 MAX_MESSAGES     = (u32(1) << WRITE_INDEX_BITS);
-
-        class message_queue_t
-        {
-            mpsc_queue_t* m_queue;
-
-        public:
-            inline message_queue_t()
-                : m_queue(nullptr)
-            {
-            }
-
-            void init(alloc_t* allocator, s32 producer_count, u32 queue_size) { m_queue = mpsc_queue_create(allocator, producer_count, queue_size); }
-            void deinit(alloc_t* allocator) { queue_destroy(allocator, m_queue); }
-
-            bool push(s32 producer_index, message_t* msg)
-            {
-                u64 p = (u64)msg;
-                return queue_enqueue(m_queue, producer_index, p);
-            }
-
-            void claim(u32& idx, u32& end) { queue_inspect(m_queue, idx, end); }
-
-            void deque(u32& idx, u32 end, message_t*& msg)
-            {
-                u64 p;
-                queue_dequeue(m_queue, idx, end, p);
-                msg = (message_t*)p;
-            }
-
-            s8 release(u32 idx, u32 end) { return queue_release(m_queue, idx, end); }
-
-            DCORE_CLASS_PLACEMENT_NEW_DELETE
-        };
 
         class mailbox_t;
 
@@ -184,109 +48,56 @@ namespace ncore
             a->m_mailbox = nullptr;
         }
 
-        class work_queue_t
-        {
-            s32         m_read;
-            s32         m_write;
-            mutex_t     m_lock;
-            actor_t**   m_work_actors;
-            semaphore_t m_sema;
-            u32         m_size;
-
-        public:
-            inline work_queue_t()
-                : m_read(0)
-                , m_write(0)
-                , m_lock()
-                , m_work_actors(nullptr)
-                , m_size(0)
-                , m_sema()
-            {
-            }
-
-            void setup(alloc_t* allocator, s32 max_actors)
-            {
-                // No need for 'size' parameter, should just be next-power-of-2 of 'max actors'
-                m_size        = math::next_power_of_two(max_actors);
-                m_work_actors = (actor_t**)allocator->allocate(sizeof(void*) * m_size);
-                m_sema.init(0, max_actors);
-                m_lock.init();
-            }
-
-            void teardown(alloc_t* allocator)
-            {
-                m_read  = 0;
-                m_write = 0;
-                m_lock.deinit();
-                allocator->deallocate(m_work_actors);
-                m_work_actors = nullptr;
-                m_size        = 0;
-                m_sema.deinit();
-            }
-
-            void push(actor_t* actor)
-            {
-                m_lock.lock();
-                s32 const cw                     = m_write;
-                s32 const nw                     = (cw + 1);
-                m_work_actors[cw & (m_size - 1)] = actor;
-                m_write                          = nw;
-                m_lock.unlock();
-                m_sema.release();
-            }
-
-            void pop(actor_t*& actor)
-            {
-                m_sema.request();
-                m_lock.lock();
-                s32 const ri = m_read;
-                m_read += 1;
-                actor = m_work_actors[ri & (m_size - 1)];
-                m_lock.unlock();
-            }
-        };
-
         class mailbox_t
         {
         public:
-            actor_t*        m_actor;
-            work_queue_t*   m_work;
-            message_queue_t m_messages;
+            actor_t*               m_actor;
+            mpmc_queue_blocking_t* m_work;
+            mpsc_queue_t*          m_messages;
 
-            void init(actor_t* actor, work_queue_t* work, alloc_t* allocator, s32 max_actors, s32 max_messages)
+            void init(actor_t* actor, mpmc_queue_blocking_t* work, alloc_t* allocator, s32 max_actors, s32 max_messages)
             {
-                m_actor = actor;
-                m_work  = work;
-                m_messages.init(allocator, max_actors, max_messages);
+                m_actor    = actor;
+                m_work     = work;
+                m_messages = mpsc_queue_create(allocator, max_actors, max_messages);
             }
 
-            void deinit(alloc_t* allocator) { m_messages.deinit(allocator); }
+            void deinit(alloc_t* allocator) { queue_destroy(allocator, m_messages); }
 
             void send(message_t* msg, actor_t* recipient);
             s32  push(s32 producer_index, message_t* msg);
-            void claim(u32& idx, u32& end); // return [i,end] range of messages
+            bool claim(u32& idx, u32& end); // return [i,end] range of messages
             void deque(u32& idx, u32 end, message_t*& msg);
             s8   release(u32 idx, u32 end); // return 1 when there are more messages queued up
         };
 
         // @Note: Multiple Producers
-        static void s_work_add(work_queue_t* queue, actor_t* sender, message_t* msg, actor_t* recipient)
+        static void s_work_add(mpmc_queue_blocking_t* queue, actor_t* sender, message_t* msg, actor_t* recipient)
         {
             if (sender->m_mailbox->push(sender->m_index, msg) == 1)
             {
-                // mailbox indicated that we have pushed a message and the actor is already
-                // marked as 'idle' and we are the one here to push him in the work-queue.
-                queue->push(recipient);
+                queue_enqueue(queue, (u64)recipient);
             }
         }
 
+        static const actor_t* s_actor_quit = (actor_t*)-1;
+
         // @Note: Multiple Consumers
-        static void s_work_take(work_queue_t* queue, actor_t*& actor, message_t*& msg, u32& msgidx, u32& msgend)
+        static bool s_work_take(mpmc_queue_blocking_t* queue, actor_t*& actor, message_t*& msg, u32& msgidx, u32& msgend)
         {
             if (actor == nullptr)
             {
-                // This will make the calling thread block if the queue is empty
-                queue->pop(actor);
+                // This will make the calling thread block on a semaphore if the queue is empty and we will be
+                // signaled when there is work to be done.
+                actor = queue_dequeue<actor_t>(queue);
+                if (actor == s_actor_quit)
+                {
+                    actor  = nullptr;
+                    msg    = nullptr;
+                    msgidx = 0;
+                    msgend = 0;
+                    return false;
+                }
 
                 // Claim a batch of messages to be processed here by this worker
                 actor->m_mailbox->claim(msgidx, msgend);
@@ -297,10 +108,11 @@ namespace ncore
                 // Take the next message out of the batch from the mailbox of the actor
                 actor->m_mailbox->deque(msgidx, msgend, msg);
             }
+            return true;
         }
 
         // @Note: Multiple Consumers
-        static void s_work_done(work_queue_t* queue, actor_t*& actor, message_t*& msg, u32& msgidx, u32& msgend)
+        static void s_work_done(mpmc_queue_blocking_t* queue, actor_t*& actor, message_t*& msg, u32& msgidx, u32& msgend)
         {
             // If 'msgidx == msgend' then try and add the actor back to the work-queue since
             // it was the last message we supposed to have processed from the batch.
@@ -310,7 +122,7 @@ namespace ncore
                 {
                     // mailbox indicated that we have to push back the actor in the work-queue
                     // because there are still messages pending.
-                    queue->push(actor);
+                    queue_enqueue(queue, (u64)actor);
                 }
                 actor = nullptr;
             }
@@ -318,10 +130,10 @@ namespace ncore
         }
 
         void mailbox_t::send(message_t* msg, actor_t* recipient) { s_work_add(m_work, m_actor, msg, recipient); }
-        s32  mailbox_t::push(s32 producer_index, message_t* msg) { return (m_messages.push(producer_index, msg)); }
-        void mailbox_t::claim(u32& idx, u32& end) { m_messages.claim(idx, end); }
-        void mailbox_t::deque(u32& idx, u32 end, message_t*& msg) { m_messages.deque(idx, end, msg); }
-        s8   mailbox_t::release(u32 idx, u32 end) { return m_messages.release(idx, end); }
+        s32  mailbox_t::push(s32 producer_index, message_t* msg) { queue_enqueue(m_messages, producer_index, (u64)msg); }
+        bool mailbox_t::claim(u32& idx, u32& end) { return queue_inspect(m_messages, idx, end); }
+        void mailbox_t::deque(u32& idx, u32 end, message_t*& msg) { msg = queue_dequeue<message_t>(m_messages, idx, end); }
+        s8   mailbox_t::release(u32 idx, u32 end) { return queue_release(m_messages, idx, end); }
 
         struct ctxt_t
         {
@@ -339,11 +151,14 @@ namespace ncore
             message_t* m_msg;
         };
 
-        void worker_thread_t::tick(work_queue_t* work, ctxt_t* ctx)
+        bool worker_thread_t::tick(mpmc_queue_blocking_t* work, ctxt_t* ctx)
         {
             // Try and take an [actor, message[i,e]] piece of work
             // If no work is available it will block on the semaphore.
-            s_work_take(work, ctx->m_actor, ctx->m_msg, ctx->m_i, ctx->m_e);
+            if (!s_work_take(work, ctx->m_actor, ctx->m_msg, ctx->m_i, ctx->m_e))
+            {
+                return false;
+            }
 
             // Let the actor handle the message
             if (ctx->m_msg->is_recipient(ctx->m_actor))
@@ -367,19 +182,18 @@ namespace ncore
 
             // Report the [actor, message[i,e]] back as 'done'
             s_work_done(work, ctx->m_actor, ctx->m_msg, ctx->m_i, ctx->m_e);
+
+            return true;
         }
 
-        // a single work_queue_t is shared between multiple worker_thread_t
-        void worker_thread_t::entry(worker_thread_t* thread, work_queue_t* work)
+        // a single mpmc_queue_blocking_t is shared between multiple worker_thread_t
+        void worker_thread_t::entry(worker_thread_t* thread, mpmc_queue_blocking_t* work)
         {
             ctxt_t ctx;
-            while (true)
-            {
-                tick(work, &ctx);
-            }
+            while (tick(work, &ctx)) {}
         }
 
-        void worker_thread_t::start(work_queue_t* work)
+        void worker_thread_t::start(mpmc_queue_blocking_t* work)
         {
             m_thread = std::thread([this, work]() { entry(this, work); });
         }
@@ -394,14 +208,14 @@ namespace ncore
             actor_t* join(handler_t* actor);
             void     leave(actor_t* actor);
 
-            alloc_t*         m_allocator;
-            s32              m_numthreads;
-            work_queue_t     m_work_queue;
-            worker_thread_t* m_thread_workers;
-            s32              m_num_actors;
-            s32              m_max_actors;
-            handler_t**      m_handlers;
-            actor_t*         m_actors;
+            alloc_t*               m_allocator;
+            s32                    m_numthreads;
+            mpmc_queue_blocking_t* m_work_queue;
+            worker_thread_t*       m_thread_workers;
+            s32                    m_num_actors;
+            s32                    m_max_actors;
+            handler_t**            m_handlers;
+            actor_t*               m_actors;
         };
 
         void system_t::setup(alloc_t* allocator, s32 num_threads, s32 max_actors)
@@ -418,14 +232,14 @@ namespace ncore
                 m_handlers[i] = nullptr;
                 s_actor_init(&m_actors[i]);
             }
-            m_work_queue.setup(m_allocator, m_max_actors);
+            m_work_queue = mpmc_queue_create(m_allocator, 2048);
         }
 
         void system_t::teardown()
         {
             stop(); // stop all workers
 
-            m_work_queue.teardown(m_allocator);
+            queue_destroy(m_allocator, m_work_queue);
 
             // deallocate all resources
             m_allocator->deallocate(m_actors);
@@ -438,7 +252,7 @@ namespace ncore
             // start all the thread workers
             for (s32 i = 0; i < m_numthreads; ++i)
             {
-                m_thread_workers[i].start(&m_work_queue);
+                m_thread_workers[i].start(m_work_queue);
             }
         }
 
@@ -472,7 +286,7 @@ namespace ncore
         actor_t* actor_join(system_t* system, handler_t* handler) { return system->join(handler); }
         void     actor_leave(system_t* system, actor_t* actor) { system->leave(actor); }
 
-        void actor_send(system_t* system, actor_t* sender, message_t* msg, actor_t* recipient) { s_work_add(&system->m_work_queue, sender, msg, recipient); }
+        void actor_send(system_t* system, actor_t* sender, message_t* msg, actor_t* recipient) { s_work_add(system->m_work_queue, sender, msg, recipient); }
 
     } // namespace nactor
 
