@@ -21,15 +21,15 @@ func GetPackage() *denv.Package {
 	mainpkg.AddPackage(ccorepkg)
 
 	// 'cactor' library
-	mainlib := denv.SetupDefaultCppLibProject("cactor", "github.com\\jurgen-kluft\\cactor")
-	mainlib.Dependencies = append(mainlib.Dependencies, cbasepkg.GetMainLib())
-	mainlib.Dependencies = append(mainlib.Dependencies, ccorepkg.GetMainLib())
+	mainlib := denv.SetupCppLibProject("cactor", "github.com\\jurgen-kluft\\cactor")
+	mainlib.AddDependencies(cbasepkg.GetMainLib()...)
+	mainlib.AddDependencies(ccorepkg.GetMainLib()...)
 
 	// 'cactor' unittest project
 	maintest := denv.SetupDefaultCppTestProject("cactor_test", "github.com\\jurgen-kluft\\cactor")
-	maintest.Dependencies = append(maintest.Dependencies, cunittestpkg.GetMainLib())
-	maintest.Dependencies = append(maintest.Dependencies, cbasepkg.GetMainLib())
-	maintest.Dependencies = append(maintest.Dependencies, ccorepkg.GetMainLib())
+	maintest.AddDependencies(cunittestpkg.GetMainLib()...)
+	maintest.AddDependencies(cbasepkg.GetMainLib()...)
+	maintest.AddDependencies(ccorepkg.GetMainLib()...)
 	maintest.Dependencies = append(maintest.Dependencies, mainlib)
 
 	mainpkg.AddMainLib(mainlib)
