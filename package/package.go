@@ -3,36 +3,42 @@ package cactor
 import (
 	cbase "github.com/jurgen-kluft/cbase/package"
 	denv "github.com/jurgen-kluft/ccode/denv"
-	ccore "github.com/jurgen-kluft/ccore/package"
 	cunittest "github.com/jurgen-kluft/cunittest/package"
 )
 
-// GetPackage returns the package object of 'cactor'
+const (
+	repo_path = "github.com\\jurgen-kluft\\"
+	repo_name = "cactor"
+)
+
 func GetPackage() *denv.Package {
-	// Dependencies
+	name := repo_name
+
+	// dependencies
 	cunittestpkg := cunittest.GetPackage()
 	cbasepkg := cbase.GetPackage()
-	ccorepkg := ccore.GetPackage()
 
-	// The main (cactor) package
-	mainpkg := denv.NewPackage("cactor")
+	// main package
+	mainpkg := denv.NewPackage(repo_path, repo_name)
 	mainpkg.AddPackage(cunittestpkg)
 	mainpkg.AddPackage(cbasepkg)
-	mainpkg.AddPackage(ccorepkg)
 
-	// 'cactor' library
-	mainlib := denv.SetupCppLibProject("cactor", "github.com\\jurgen-kluft\\cactor")
+	// main library
+	mainlib := denv.SetupCppLibProject(mainpkg, name)
 	mainlib.AddDependencies(cbasepkg.GetMainLib()...)
-	mainlib.AddDependencies(ccorepkg.GetMainLib()...)
 
-	// 'cactor' unittest project
-	maintest := denv.SetupDefaultCppTestProject("cactor_test", "github.com\\jurgen-kluft\\cactor")
+	// test library
+	testlib := denv.SetupCppTestLibProject(mainpkg, name)
+	testlib.AddDependencies(cbasepkg.GetTestLib()...)
+
+	// unittest project
+	maintest := denv.SetupCppTestProject(mainpkg, name)
 	maintest.AddDependencies(cunittestpkg.GetMainLib()...)
 	maintest.AddDependencies(cbasepkg.GetMainLib()...)
-	maintest.AddDependencies(ccorepkg.GetMainLib()...)
-	maintest.Dependencies = append(maintest.Dependencies, mainlib)
+	maintest.AddDependency(mainlib)
 
 	mainpkg.AddMainLib(mainlib)
+	mainpkg.AddTestLib(testlib)
 	mainpkg.AddUnittest(maintest)
 	return mainpkg
 }
