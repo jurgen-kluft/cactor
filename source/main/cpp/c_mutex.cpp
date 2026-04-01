@@ -106,11 +106,12 @@ namespace ncore
     {
         std::atomic<s32> m_contentionCount;
         lw_sema_t*       m_sema;
+        DCORE_CLASS_PLACEMENT_NEW_DELETE
     };
 
     lw_mutex_t* create_lw_mutex(alloc_t* allocator)
     {
-        lw_mutex_instance_t* m = allocator->construct<lw_mutex_instance_t>();
+        lw_mutex_instance_t* m = g_construct<lw_mutex_instance_t>(allocator);
         m->m_sema              = create_lw_sema(allocator, 0);
         return (lw_mutex_t*)m;
     }
@@ -118,8 +119,8 @@ namespace ncore
     void destroy(alloc_t* allocator, lw_mutex_t* mutex)
     {
         lw_mutex_instance_t* m = (lw_mutex_instance_t*)mutex;
-        destroy(allocator, m->m_sema);
-        allocator->destruct<lw_mutex_instance_t>(m);
+        g_destruct(allocator, m->m_sema);
+        g_destruct(allocator, m);
     }
 
     void lock(lw_mutex_t* mutex)
@@ -127,7 +128,7 @@ namespace ncore
         lw_mutex_instance_t* m = (lw_mutex_instance_t*)mutex;
         if (m->m_contentionCount.fetch_add(1, std::memory_order_acquire) > 0)
         {
-            wait(m->m_sema);
+            sema_wait(m->m_sema);
         }
     }
 
@@ -147,7 +148,7 @@ namespace ncore
         ASSERT(oldCount > 0);
         if (oldCount > 1)
         {
-            post(m->m_sema);
+            sema_post(m->m_sema);
         }
     }
 
