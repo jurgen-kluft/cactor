@@ -1,38 +1,31 @@
 # ccore actor library (C++)
 
-A tiny actor library focussing mainly on performance which means that:
+A tiny actor library focussing mainly on performance and simplicity.
 
-* Constructing an actor-system you need to supply a number for the maximum number of actors
-* Need to provide beforehand the maximum number of messages that can be queued for actors
-* Actor can only send messages by pointer (no value copy, performance/simplicity)
-* Message will be send back to sender in `actor_t::returned(message_t*)` (re-use/performance/garbage-collection)
-* Actors receive messages in `actor_t::received(message_t*)`, actor has to switch:case on the message
-  type manually. (simplicity/performance)
+## usage
 
 ```c++
-    struct mydatamessage : public message_t
+    struct mydatamessage : public nactor::message_t
     {
-        void    setup(actor_t* from, actor_t* to, msg_id_t id);
+        void    setup(nactor::actor_t* from, nactor::actor_t* to, msg_id_t id);
         byte    m_data[64];
     };
-```
 
-```c++
-    class actor : public handler_t
+    class myactor : public nactor::handler_t
     {
-        actor_t*                  m_actor;
-        system_t*                 m_system;
-        msg_id_t                  m_data_msg_id;
-        freelist_t<mydatamessage> m_data_msgs;
+        nactor::actor_t*                  m_actor;
+        nactor::system_t*                 m_system;
+        nactor::msg_id_t                  m_data_msg_id;
+        nactor::freelist_t<mydatamessage> m_data_msgs;
 
     public:
-        void join(system_t* system)
+        void join(nactor::system_t* system)
         {
             m_system = system;
-            m_actor = actor_join(system, this);
+            m_actor = nactor::actor_join(system, this);
         }
 
-        virtual void received(message_t* msg)
+        virtual void received(nactor::message_t* msg)
         {
             // Inspect the message and react
 
@@ -42,10 +35,10 @@ A tiny actor library focussing mainly on performance which means that:
             // Fill in data
 
             // Send it to the recipient of the incoming message
-            actor_send(m_system, m_actor, msg_to_send, msg->get_recipient());
+            nactor::actor_send(m_system, m_actor, msg_to_send, msg->get_recipient());
         }
 
-        virtual void returned(message_t*& msg)
+        virtual void returned(nactor::message_t*& msg)
         {
             if (msg->has_id(m_data_msg_id))
             {
@@ -55,16 +48,19 @@ A tiny actor library focussing mainly on performance which means that:
             // Custom code
         }
     };
-```
 
-```c++
-system_t*    system = nactor::create_system(allocator, 8, 10, 1024, 32);
+void some_function()
+{
+    nactor::allocator_t* allocator = nactor::allocator_t::get_system();
+    nactor::system_t*    system = nactor::create_system(allocator, 8, 10, 1024, 32);
 
-// user needs to have classes implemented that derived from nactor::handler_t
+    // user needs to have classes implemented that derived from nactor::handler_t
 
-actor_t*     actor1 = actor_join(system, handler1);
-actor_t*     actor2 = actor_join(system, handler2);
+    nactor::actor_t*     actor1 = nactor::actor_join(system, handler1);
+    nactor::actor_t*     actor2 = nactor::actor_join(system, handler2);
 
-// if the user wants to send message from the main thread and other threads, then
-// on each thread he needs to reserve a 'producer' index.
+    // if the user wants to send message from the main thread and other threads, then
+    // on each thread he needs to reserve a 'producer' index.
+}
+
 ```
