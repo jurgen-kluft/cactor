@@ -50,6 +50,12 @@ namespace ncore
             queue->cv.notify_all();
         }
 
+        void worker_queue_destroy(worker_queue_t* queue)
+        {
+            // arena ?
+            // delete queue;
+        }
+
         // Push an actor to the back of the queue (Multi-Producer)
         void worker_queue_push(worker_queue_t* queue, actor_t* actor)
         {

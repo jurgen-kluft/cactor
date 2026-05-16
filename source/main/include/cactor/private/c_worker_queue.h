@@ -14,6 +14,7 @@ namespace ncore
         struct worker_queue_t;
         worker_queue_t* worker_queue_create();
         void            worker_queue_shutdown(worker_queue_t* queue);
+        void            worker_queue_destroy(worker_queue_t* queue);
 
         void     worker_queue_push(worker_queue_t* queue, actor_t* actor);
         actor_t* worker_queue_pop(worker_queue_t* queue);

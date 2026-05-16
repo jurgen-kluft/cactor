@@ -34,43 +34,70 @@ namespace ncore
             void stop();
 
         protected:
-            bool tick(worker_queue_t* work);
-            void entry(worker_thread_t* thread, worker_queue_t* work);
-
+            bool        tick(worker_queue_t* work);
             std::thread m_thread;
         };
 
         bool worker_thread_t::tick(worker_queue_t* global_queue)
         {
-            while (true)
+            actor_t* actor = worker_queue_pop(global_queue);
+            if (actor == nullptr)
+                return false; // No more work, time to exit
+
+            // 1. Isolate the current rotation batch
+            msg_t* msg_batch = mailbox_rotate(actor->m_mailbox);
+
+            // 2. Consume the isolated batch
+            while (msg_batch != nullptr)
             {
-                actor_t* actor = worker_queue_pop(global_queue);
-                if (actor == nullptr)
-                    break; // Shutdown
-
-                // 1. Isolate the current rotation batch
-                msg_t* messages = mailbox_rotate(actor->m_mailbox);
-
-                // 2. Consume the isolated batch
-                while (messages != nullptr)
-                {
-                    msg_t* msg = messages;
-                    actor->m_process(actor->m_user, msg);  // Process message
-                    actor->m_returned(actor->m_user, msg); // Return to sender pool
-                    messages = messages->m_next;
-                }
-
-                // 3. Finalize state and check if re-scheduling is necessary
-                if (mailbox_finalize(actor->m_mailbox))
-                {
-                    worker_queue_push(global_queue, actor);
-                }
+                msg_t* msg = msg_batch;
+                msg_batch  = msg->m_next;
+                // Execute business logic...
+                actor->m_process(actor->m_user, msg);
+                // Automatic Garbage Collection (recycle message back to sender pool)
+                actor->m_returned(actor->m_user, msg);
             }
+
+            // 3. Finalize state and check if re-scheduling is necessary
+            if (mailbox_finalize(actor->m_mailbox))
+            {
+                worker_queue_push(global_queue, actor);
+            }
+
+            return true; // Continue processing
         }
 
         void worker_thread_t::start(worker_queue_t* work)
         {
-            m_thread = std::thread([this, work]() { entry(this, work); });
+            // Prevent starting an already active thread
+            if (m_thread.joinable())
+                return;
+
+            // Correctly passes 'this' and the queue pointer into the lambda context
+            m_thread = std::thread(
+                [this, work]()
+                {
+                    // Keep executing tick() until it signals that the queue has shut down
+                    while (this->tick(work))
+                    {
+                        // Intentionally empty: loop condition drives the execution
+                    }
+                });
+        }
+
+        // Assuming worker_queue_shutdown wakes up all threads and causes worker_queue_pop to return nullptr
+        void worker_thread_t::stop()
+        {
+            // Check if the thread is actually running before trying to stop it
+            if (m_thread.joinable())
+            {
+                // Note: The global system shutdown coordinator should call
+                // worker_queue_shutdown(global_queue) right BEFORE calling stop()
+                // on individual worker threads to unblock them cleanly.
+
+                // Wait for this specific background thread to finish its current loop and exit
+                m_thread.join();
+            }
         }
 
         class system_t

@@ -12,7 +12,6 @@ namespace ncore
         struct system_t;
         struct mailbox_t;
 
-        typedef void (*actor_received_fn)(void* user, msg_t* msg);
         typedef void (*actor_process_fn)(void* user, msg_t* msg);
         typedef void (*actor_returned_fn)(void* user, msg_t*& msg);
 
@@ -20,7 +19,6 @@ namespace ncore
         {
             s32               m_index;
             mailbox_t*        m_mailbox;
-            actor_received_fn m_received;
             actor_process_fn  m_process;
             actor_returned_fn m_returned;
             void*             m_user;
