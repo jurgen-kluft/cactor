@@ -62,7 +62,7 @@ namespace ncore
             if (actor == nullptr)
                 return;
 
-            actor->next_scheduled = nullptr;
+            actor->m_next_scheduled = nullptr;
 
             {
                 std::lock_guard<std::mutex> lock(queue->mutex);
@@ -79,7 +79,7 @@ namespace ncore
                 else
                 {
                     // Append to the end of the line
-                    queue->tail->next_scheduled = actor;
+                    queue->tail->m_next_scheduled = actor;
                     queue->tail                 = actor;
                 }
             }
@@ -105,7 +105,7 @@ namespace ncore
 
             // Dequeue the front actor
             actor_t* actor = queue->head;
-            queue->head    = actor->next_scheduled;
+            queue->head    = actor->m_next_scheduled;
 
             // If the queue is now empty, clear the tail pointer too
             if (queue->head == nullptr)
@@ -113,7 +113,7 @@ namespace ncore
                 queue->tail = nullptr;
             }
 
-            actor->next_scheduled = nullptr; // Clean up pointer
+            actor->m_next_scheduled = nullptr; // Clean up pointer
             return actor;
         }
 

@@ -10,6 +10,7 @@ namespace ncore
     namespace nactor
     {
         struct system_t;
+        struct msg_t;
         struct mailbox_t;
 
         typedef void (*actor_process_fn)(void* user, msg_t* msg);
@@ -27,7 +28,7 @@ namespace ncore
             actor_t*          m_next_scheduled;
         };
 
-        void init_actor(actor_t* actor, system_t* system, s32 index, void* user, actor_received_fn received, actor_process_fn process, actor_returned_fn returned);
+        void init_actor(actor_t* actor, system_t* system, s32 index, void* user, actor_process_fn process, actor_returned_fn returned);
 
     } // namespace nactor
 } // namespace ncore

@@ -4,7 +4,6 @@
 
 #include "cactor/c_actor.h"
 #include "cactor/private/c_actor.h"
-#include "cactor/private/c_queue.h"
 #include "cactor/private/c_mailbox.h"
 #include "cactor/private/c_message.h"
 #include "cactor/private/c_worker_queue.h"
@@ -15,11 +14,10 @@ namespace ncore
 {
     namespace nactor
     {
-        void init_actor(actor_t* actor, system_t* system, s32 index, void* user, actor_received_fn received, actor_process_fn process, actor_returned_fn returned)
+        void init_actor(actor_t* actor, system_t* system, s32 index, void* user, actor_process_fn process, actor_returned_fn returned)
         {
             actor->m_index              = index;
             actor->m_user               = user;
-            actor->m_received           = received;
             actor->m_process            = process;
             actor->m_returned           = returned;
             actor->m_mailbox            = mailbox_create();
@@ -100,16 +98,8 @@ namespace ncore
             }
         }
 
-        class system_t
+        struct system_t
         {
-        public:
-            void     setup(alloc_t* allocator, s32 num_threads, s32 max_actors);
-            void     teardown();
-            void     start();
-            void     stop();
-            actor_t* join(void* user, actor_received_fn received, actor_process_fn process, actor_returned_fn returned);
-            void     leave(actor_t* actor);
-
             alloc_t*         m_allocator;
             s32              m_numthreads;
             worker_queue_t*  m_work_queue;
@@ -119,47 +109,54 @@ namespace ncore
             actor_t*         m_actors;
         };
 
-        void system_t::setup(alloc_t* allocator, s32 num_threads, s32 max_actors)
+        void     setup(system_t* self, alloc_t* allocator, s32 num_threads, s32 max_actors);
+        void     teardown(system_t* self);
+        void     start(system_t* self);
+        void     stop(system_t* self);
+        actor_t* join(system_t* self, void* user, actor_process_fn process, actor_returned_fn returned);
+        void     leave(system_t* self, actor_t* actor);
+
+        void setup(system_t* self, alloc_t* allocator, s32 num_threads, s32 max_actors)
         {
-            m_allocator      = allocator;
-            m_numthreads     = num_threads;
-            m_thread_workers = (worker_thread_t*)m_allocator->allocate(sizeof(worker_thread_t) * num_threads);
-            m_num_actors     = 0;
-            m_max_actors     = max_actors;
-            m_actors         = (actor_t*)m_allocator->allocate(sizeof(actor_t) * max_actors);
+            self->m_allocator      = allocator;
+            self->m_numthreads     = num_threads;
+            self->m_thread_workers = (worker_thread_t*)self->m_allocator->allocate(sizeof(worker_thread_t) * num_threads);
+            self->m_num_actors     = 0;
+            self->m_max_actors     = max_actors;
+            self->m_actors         = (actor_t*)self->m_allocator->allocate(sizeof(actor_t) * max_actors);
             for (s32 i = 0; i < max_actors; ++i)
-                init_actor(&m_actors[i], this, i, nullptr, nullptr, nullptr, nullptr);
-            m_work_queue = worker_queue_create();
+                init_actor(&self->m_actors[i], self, i, nullptr, nullptr, nullptr);
+            self->m_work_queue = worker_queue_create();
         }
 
-        void system_t::teardown()
+        void teardown(system_t* self)
         {
-            stop();                              // stop all workers
-            worker_queue_shutdown(m_work_queue); // shutdown the queue to unblock workers
+            stop(self);                              // stop all workers
+            worker_queue_shutdown(self->m_work_queue); // shutdown the queue to unblock workers
 
             // deallocate all resources
-            m_allocator->deallocate(m_actors);
-            m_allocator->deallocate(m_thread_workers);
+            self->m_allocator->deallocate(self->m_actors);
+            self->m_allocator->deallocate(self->m_thread_workers);
         }
 
-        void system_t::start()
+        void start(system_t* self)
         {
             // start all the thread workers
-            for (s32 i = 0; i < m_numthreads; ++i)
+            for (s32 i = 0; i < self->m_numthreads; ++i)
             {
-                m_thread_workers[i].start(m_work_queue);
+                self->m_thread_workers[i].start(self->m_work_queue);
             }
         }
 
-        void system_t::stop()
+        void stop(system_t* self)
         {
             // push 'quit' work into the queue for each actor
 
             // wait for all thread workers to join
             // start all the thread workers
-            for (s32 i = 0; i < m_numthreads; ++i)
+            for (s32 i = 0; i < self->m_numthreads; ++i)
             {
-                m_thread_workers[i].stop();
+                self->m_thread_workers[i].stop();
             }
         }
 
@@ -167,19 +164,19 @@ namespace ncore
         {
             system_t* sys    = (system_t*)allocator->allocate(sizeof(system_t));
             sys->m_allocator = allocator;
-            sys->setup(allocator, num_threads, max_actors);
+            setup(sys, allocator, num_threads, max_actors);
             return sys;
         }
 
         void destroy_system(system_t* system)
         {
             alloc_t* allocator = system->m_allocator;
-            system->teardown();
+            teardown(system);
             allocator->deallocate(system);
         }
 
-        actor_t* actor_join(system_t* system, void* user, actor_received_fn received, actor_process_fn process, actor_returned_fn returned) { return system->join(user, received, process, returned); }
-        void     actor_leave(system_t* system, actor_t* actor) { system->leave(actor); }
+        actor_t* actor_join(system_t* system, void* user, actor_process_fn process, actor_returned_fn returned) { return join(system, user, process, returned); }
+        void     actor_leave(system_t* system, actor_t* actor) { leave(system, actor); }
 
         void actor_send(actor_t* sender, msg_t* msg, actor_t* recipient)
         {
